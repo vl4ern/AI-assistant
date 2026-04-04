@@ -1,0 +1,99 @@
+openapi: 3.1.0
+info:
+  title: AI Assistant API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8000
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  service:
+                    type: string
+                  version:
+                    type: string
+
+  /v1/tasks:
+    get:
+      summary: List tasks
+      responses:
+        "200":
+          description: Tasks list
+    post:
+      summary: Create task
+      responses:
+        "201":
+          description: Task created
+
+  /v1/tasks/{task_id}/status:
+    patch:
+      summary: Update task status
+      parameters:
+        - in: path
+          name: task_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task updated
+        "404":
+          description: Not found
+
+  /v1/events:
+    get:
+      summary: List events
+      responses:
+        "200":
+          description: Events list
+    post:
+      summary: Create event
+      responses:
+        "201":
+          description: Event created
+
+  /v1/schedule/rebuild:
+    post:
+      summary: Rebuild schedule
+      responses:
+        "200":
+          description: Schedule plan
+
+  /v1/schedule/today:
+    get:
+      summary: Today view
+      responses:
+        "200":
+          description: Tasks planned for today
+
+  /v1/integrations:
+    get:
+      summary: List available providers
+      responses:
+        "200":
+          description: Providers list
+
+  /v1/integrations/{provider_name}/sync:
+    post:
+      summary: Sync provider
+      parameters:
+        - in: path
+          name: provider_name
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Sync result
+        "404":
+          description: Provider not found
