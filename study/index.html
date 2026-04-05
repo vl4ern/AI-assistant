@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Assistant</title>
+    <link rel="stylesheet" href="./smth.css" />
+  </head>
+  <body>
+    <div class="app-layout">
+      <aside class="sidebar">
+        <h2 class="logo">AI Assistant</h2>
+
+        <nav class="sidebar-nav">
+          <ul>
+            <li class="nav-item active"><a href="#">Dashboard</a></li>
+            <li class="nav-item"><a href="#">Tasks</a></li>
+            <li class="nav-item"><a href="#">Projects</a></li>
+            <li class="nav-item"><a href="#">Calendar</a></li>
+            <li class="nav-item"><a href="#">Analytics</a></li>
+            <li class="nav-item"><a href="#">Settings</a></li>
+          </ul>
+        </nav>
+      </aside>
+
+      <div class="page-content">
+        <header class="topbar">
+          <div class="search-box">Search tasks, projects, deadlines...</div>
+
+          <div class="topbar-right">
+            <button class="secondary-button">Open Calendar</button>
+            <button class="primary-button">New Task</button>
+            <div class="profile-badge">H</div>
+          </div>
+        </header>
+
+        <section class="page-header">
+          <h1>Dashboard</h1>
+          <p>Plan smarter, study better.</p>
+        </section>
+
+        <section class="overview-grid">
+          <div class="stat-card">
+            <p class="stat-label">Tasks Today</p>
+            <h3 class="stat-value">4</h3>
+          </div>
+
+          <div class="stat-card">
+            <p class="stat-label">Active Projects</p>
+            <h3 class="stat-value">3</h3>
+          </div>
+
+          <div class="stat-card">
+            <p class="stat-label">Deadlines This Week</p>
+            <h3 class="stat-value">5</h3>
+          </div>
+
+          <div class="stat-card">
+            <p class="stat-label">Focus Hours</p>
+            <h3 class="stat-value">12h</h3>
+          </div>
+        </section>
+
+        <main class="dashboard-grid">
+          <div class="left-column">
+            <section class="content-section">
+              <h2>Today's Tasks</h2>
+              <ul>
+                <li>Finish homework</li>
+                <li>Create database report</li>
+                <li>Read AI lecture notes</li>
+                <li>Start working</li>
+              </ul>
+            </section>
+
+            <section class="content-section">
+              <h2>AI Recommendations</h2>
+              <p>Start with the most difficult task first.</p>
+              <p>Leave two hours in the evening for deadline preparation.</p>
+            </section>
+          </div>
+
+          <div class="right-column">
+            <section class="content-section">
+              <h2>Upcoming Deadlines</h2>
+              <ul>
+                <li>Web project draft — Friday</li>
+                <li>Physics lab report — Saturday</li>
+                <li>English presentation — Monday</li>
+              </ul>
+            </section>
+
+            <section class="content-section">
+              <h2>Quick Actions</h2>
+              <div class="action-list">
+                <button class="action-button">Add Task</button>
+                <button class="action-button">Review Deadlines</button>
+                <button class="action-button">Start Focus Session</button>
+                <button class="action-button">Open Analytics</button>
+              </div>
+            </section>
+          </div>
+        </main>
+      </div>
+    </div>
+  </body>
+</html>
