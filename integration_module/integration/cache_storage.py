@@ -16,8 +16,8 @@ class SQLiteCacheStorage(ICacheStorage):
     def _init_db(self):
         """Инициализация таблиц"""
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS tasks (
                     id TEXT PRIMARY KEY,
                     external_id TEXT NOT NULL,
@@ -34,14 +34,11 @@ class SQLiteCacheStorage(ICacheStorage):
                     version INTEGER,
                     data TEXT
                 )
-            """
-            )
-            conn.execute(
-                """
+            """)
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_external_id 
                 ON tasks(external_id, source_type)
-            """
-            )
+            """)
 
     def get_task(self, task_id: str) -> Optional[Task]:
         with sqlite3.connect(self.db_path) as conn:
@@ -94,6 +91,7 @@ class SQLiteCacheStorage(ICacheStorage):
             return True
         except Exception as e:
             print(f"Error saving task: {e}")
+            print(f"Task: {task.title}, external_id: {task.external_id}")
             return False
 
     def delete_task(self, task_id: str) -> bool:

@@ -22,6 +22,7 @@ class TaskStatus(Enum):
 class Task:
     """Внутреннее представление задачи (единый формат)"""
 
+    # необходимо согласовать поля с остальными модулями
     id: str
     external_id: str
     source_type: SourceType
