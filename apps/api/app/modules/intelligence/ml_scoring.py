@@ -76,6 +76,7 @@ class MLScoringService:
     def score_single_task(self, task: Task, events: list[Event], now: datetime) -> float:
         # Всегда считаем через ML-модель.
         features = self._task_features(task=task, events=events, now=now)
+        
         return float(self._model.predict([features])[0])
 
     def record_reorder_feedback(
@@ -234,7 +235,7 @@ class MLScoringService:
             blockers = [
                 task_by_id[dep_id]
                 for dep_id in task.depends_on
-                if dep_id in task_by_id and dep_id in base_scores
+                if dep_id in base_scores
             ]
             if not blockers or task.id not in base_scores:
                 continue
