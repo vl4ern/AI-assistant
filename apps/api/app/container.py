@@ -8,13 +8,16 @@ from app.modules.integrations.service import IntegrationService
 from app.modules.intelligence.ml_scoring import MLScoringService
 from app.modules.intelligence.scheduler import GreedyScheduler
 from app.modules.intelligence.service import SchedulerService
-from app.modules.knowledge.in_memory_repository import InMemoryKnowledgeRepository
 from app.modules.knowledge.models import EventCreate, TaskCreate
+from app.modules.knowledge.postgres_repository import PostgresKnowledgeRepository
 
 
 class Container:
     def __init__(self) -> None:
-        self.knowledge_repository = InMemoryKnowledgeRepository()
+        self.knowledge_repository = PostgresKnowledgeRepository(
+            settings.database_url,
+            auto_init_schema=settings.postgres_auto_init_schema,
+        )
 
         self.scheduler = GreedyScheduler(
             slot_minutes=settings.schedule_slot_minutes,
