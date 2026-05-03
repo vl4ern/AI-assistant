@@ -31,6 +31,7 @@ paths:
           description: Tasks list
     post:
       summary: Create task
+      description: Supports optional split planning fields allow_split and min_chunk_minutes.
       responses:
         "201":
           description: Task created
@@ -75,6 +76,15 @@ paths:
       responses:
         "200":
           description: Tasks planned for today
+
+  /v1/schedule/reorder-feedback:
+    post:
+      summary: Record manual task reorder feedback for ML retraining
+      responses:
+        "200":
+          description: Feedback accepted
+        "404":
+          description: Task not found
 
   /v1/integrations:
     get:

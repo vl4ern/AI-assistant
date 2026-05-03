@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from app.core.settings import settings
 from app.modules.integrations.providers import default_providers
 from app.modules.integrations.service import IntegrationService
+from app.modules.intelligence.ml_scoring import MLScoringService
 from app.modules.intelligence.scheduler import GreedyScheduler
 from app.modules.intelligence.service import SchedulerService
 from app.modules.knowledge.in_memory_repository import InMemoryKnowledgeRepository
@@ -22,9 +23,18 @@ class Container:
             wake_end_hour=settings.wake_end_hour,
         )
 
+        self.scoring_service = MLScoringService(
+            wake_start_hour=settings.wake_start_hour,
+            wake_end_hour=settings.wake_end_hour,
+            horizon_days=settings.schedule_horizon_days,
+            retrain_batch_size=settings.ml_retrain_batch_size,
+            overdue_bonus=settings.ml_overdue_bonus,
+        )
+
         self.scheduler_service = SchedulerService(
             repository=self.knowledge_repository,
             scheduler=self.scheduler,
+            scoring_service=self.scoring_service,
         )
 
         self.integration_service = IntegrationService(

@@ -8,7 +8,7 @@
 ## Tasks / Events
 
 - `GET /v1/tasks` — список задач.
-- `POST /v1/tasks` — создать задачу.
+- `POST /v1/tasks` — создать задачу (`allow_split`, `min_chunk_minutes` добавлены как опциональные поля).
 - `PATCH /v1/tasks/{task_id}/status` — изменить статус.
 - `GET /v1/events` — список занятых событий.
 - `POST /v1/events` — создать событие.
@@ -17,6 +17,7 @@
 
 - `POST /v1/schedule/rebuild` — пересчитать расписание.
 - `GET /v1/schedule/today` — получить задачи на сегодня + prime-task.
+- `POST /v1/schedule/reorder-feedback` — записать ручной reorder задачи для дообучения модели.
 
 ## Integrations
 

@@ -21,7 +21,13 @@ class GreedyScheduler:
         self.wake_start_hour = wake_start_hour
         self.wake_end_hour = wake_end_hour
 
-    def build_plan(self, tasks: list[Task], events: list[Event], now: datetime) -> SchedulePlan:
+    def build_plan(
+        self,
+        tasks: list[Task],
+        events: list[Event],
+        now: datetime,
+        task_scores: dict[str, float] | None = None,
+    ) -> SchedulePlan:
         current = self._to_utc(now)
         horizon_end = current + timedelta(days=self.horizon_days)
 
@@ -51,33 +57,75 @@ class GreedyScheduler:
 
         free_windows = self._find_free_windows(current, horizon_end, fixed_busy_intervals)
 
-        scored_tasks = sorted(
-            [(score_task(task, current), task) for task in candidates],
-            key=lambda item: item[0],
-            reverse=True,
-        )
+        if task_scores is None:
+            ranked = sorted(
+                [(score_task(task, current), task) for task in candidates],
+                key=lambda item: item[0],
+                reverse=True,
+            )
+        else:
+            ranked = sorted(
+                [
+                    (
+                        float(task_scores.get(task.id, score_task(task, current))),
+                        task,
+                    )
+                    for task in candidates
+                ],
+                key=lambda item: item[0],
+                reverse=True,
+            )
 
         scheduled_slots: list[ScheduledSlot] = []
         unscheduled_task_ids: list[str] = []
+        unscheduled_seen: set[str] = set()
 
-        for task_score, task in scored_tasks:
+        for task_score, task in ranked:
             needed_minutes = self._round_up_to_slot(task.estimated_minutes)
             latest_end = self._to_utc(task.deadline) if task.deadline else horizon_end
-            slot = self._allocate_window(free_windows, needed_minutes, latest_end)
-            if slot is None:
-                unscheduled_task_ids.append(task.id)
+
+            whole_slot = self._allocate_window(free_windows, needed_minutes, latest_end)
+            if whole_slot is not None:
+                start_at, end_at = whole_slot
+                scheduled_slots.append(
+                    ScheduledSlot(
+                        task_id=task.id,
+                        title=task.title,
+                        start_at=start_at,
+                        end_at=end_at,
+                        score=task_score,
+                    )
+                )
                 continue
 
-            start_at, end_at = slot
-            scheduled_slots.append(
-                ScheduledSlot(
-                    task_id=task.id,
-                    title=task.title,
-                    start_at=start_at,
-                    end_at=end_at,
-                    score=task_score,
-                )
+            if not task.allow_split:
+                if task.id not in unscheduled_seen:
+                    unscheduled_task_ids.append(task.id)
+                    unscheduled_seen.add(task.id)
+                continue
+
+            min_chunk = task.min_chunk_minutes or self.slot_minutes
+            split_slots, remaining_minutes = self._allocate_split_windows(
+                free_windows=free_windows,
+                total_minutes=needed_minutes,
+                latest_end=latest_end,
+                min_chunk_minutes=min_chunk,
             )
+
+            for start_at, end_at in split_slots:
+                scheduled_slots.append(
+                    ScheduledSlot(
+                        task_id=task.id,
+                        title=task.title,
+                        start_at=start_at,
+                        end_at=end_at,
+                        score=task_score,
+                    )
+                )
+
+            if remaining_minutes > 0 and task.id not in unscheduled_seen:
+                unscheduled_task_ids.append(task.id)
+                unscheduled_seen.add(task.id)
 
         scheduled_slots.sort(key=lambda item: item.start_at)
         prime_task_id = scheduled_slots[0].task_id if scheduled_slots else None
@@ -88,6 +136,31 @@ class GreedyScheduler:
             unscheduled_task_ids=unscheduled_task_ids,
             prime_task_id=prime_task_id,
         )
+
+    def _allocate_split_windows(
+        self,
+        free_windows: list[tuple[datetime, datetime]],
+        total_minutes: int,
+        latest_end: datetime,
+        min_chunk_minutes: int,
+    ) -> tuple[list[tuple[datetime, datetime]], int]:
+        slots: list[tuple[datetime, datetime]] = []
+        remaining = total_minutes
+
+        chunk_minutes = self._normalize_chunk_size(min_chunk_minutes)
+        while remaining > 0:
+            next_chunk = min(chunk_minutes, remaining)
+            slot = self._allocate_window(free_windows, next_chunk, latest_end)
+            if slot is None:
+                break
+
+            slots.append(slot)
+            remaining -= next_chunk
+
+        return slots, remaining
+
+    def _normalize_chunk_size(self, minutes: int) -> int:
+        return max(self.slot_minutes, self._round_up_to_slot(minutes))
 
     def _find_free_windows(
         self,

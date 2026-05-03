@@ -21,6 +21,7 @@ def update_task_status(task_id: str, payload: TaskStatusUpdate) -> Task:
     item = container.knowledge_repository.update_task_status(task_id, payload.status)
     if item is None:
         raise HTTPException(status_code=404, detail="Task not found")
+    container.scheduler_service.on_task_status_updated(item)
     return item
 
 

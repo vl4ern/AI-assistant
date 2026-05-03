@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -27,3 +28,17 @@ class TodayView(BaseModel):
     prime_task_id: str | None
     tasks: list[Task]
     schedule_dirty: bool
+
+
+class ReorderFeedbackRequest(BaseModel):
+    moved_task_id: str
+    left_task_id: Optional[str] = None
+    right_task_id: Optional[str] = None
+    moved_at: Optional[datetime] = None
+
+
+class ReorderFeedbackResult(BaseModel):
+    moved_task_id: str
+    target_score: float
+    samples_in_batch: int
+    retrained: bool

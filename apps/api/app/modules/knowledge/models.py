@@ -19,6 +19,8 @@ class TaskBase(BaseModel):
     project_id: str | None = None
     auto_reschedule: bool = True
     depends_on: list[str] = Field(default_factory=list)
+    allow_split: bool = False
+    min_chunk_minutes: int | None = Field(default=None, ge=15, le=24 * 60)
 
 
 class TaskCreate(TaskBase):
