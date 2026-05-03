@@ -1,9 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ChangeEvent } from 'react';
 
 type Page = 'dashboard' | 'tasks' | 'calendar' | 'projects' | 'analytics' | 'settings';
 type TaskPriority = 'High' | 'Medium' | 'Low';
 type ImportMode = 'smart' | 'classes' | 'exams';
-type SourceType = 'university' | 'manual' | 'other';
 
 type Task = {
   id: number;
@@ -287,6 +286,16 @@ function App() {
   const [importMode, setImportMode] = useState<ImportMode>('smart');
   const [calendarSourceLabel, setCalendarSourceLabel] = useState('Semester template');
 
+  // Task creation modal state
+  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskCourse, setNewTaskCourse] = useState('');
+  const [newTaskDay, setNewTaskDay] = useState('');
+  const [newTaskTime, setNewTaskTime] = useState('');
+  const [newTaskPriority, setNewTaskPriority] = useState<TaskPriority>('Medium');
+  const [newTaskTag, setNewTaskTag] = useState('');
+  const [taskFormError, setTaskFormError] = useState('');
+
   const currentMonth = semesterMonths[currentMonthIndex];
 
   const monthCells = useMemo(() => getMonthGrid(currentMonth.year, currentMonth.month), [currentMonth]);
@@ -318,6 +327,56 @@ function App() {
     );
   }
 
+  function openTaskModal(): void {
+    setIsTaskModalOpen(true);
+    setTaskFormError('');
+  }
+
+  function closeTaskModal(): void {
+    setIsTaskModalOpen(false);
+    setNewTaskTitle('');
+    setNewTaskCourse('');
+    setNewTaskDay('');
+    setNewTaskTime('');
+    setNewTaskPriority('Medium');
+    setNewTaskTag('');
+    setTaskFormError('');
+  }
+
+  function createTask(): void {
+    const title = newTaskTitle.trim();
+    const course = newTaskCourse.trim() || 'Personal';
+    const day = newTaskDay.trim();
+    const time = newTaskTime.trim();
+    const tag = newTaskTag.trim() || 'Custom';
+
+    if (!title) {
+      setTaskFormError('Enter task title.');
+      return;
+    }
+
+    if (!day || !time) {
+      setTaskFormError('Enter day and time.');
+      return;
+    }
+
+    const nextId = tasks.length > 0 ? Math.max(...tasks.map((task) => task.id)) + 1 : 1;
+
+    const createdTask: Task = {
+      id: nextId,
+      title,
+      course,
+      deadline: `${day}, ${time}`,
+      priority: newTaskPriority,
+      customTag: tag,
+      completed: false,
+    };
+
+    setTasks((prevTasks) => [createdTask, ...prevTasks]);
+    setActivePage('tasks');
+    closeTaskModal();
+  }
+
   function openDayDetails(date: Date): void {
     setSelectedDay({
       date,
@@ -331,7 +390,7 @@ function App() {
     setSelectedDay(null);
   }
 
-  function handleFileChange(event: React.ChangeEvent<HTMLInputElement>): void {
+  function handleFileChange(event: ChangeEvent<HTMLInputElement>): void {
     const file = event.target.files?.[0] ?? null;
     if (!file) {
       setSelectedFileName('No schedule file selected');
@@ -376,7 +435,7 @@ function App() {
             linear-gradient(180deg, #06101f 0%, #081120 100%);
           color: var(--text);
         }
-        button, input { font: inherit; }
+        button, input, select { font: inherit; }
         button { border: none; cursor: pointer; }
         .app-shell { min-height: 100vh; display: flex; }
         .sidebar {
@@ -533,18 +592,24 @@ function App() {
           width: 38px; height: 38px; border-radius: 12px; background: rgba(255,255,255,0.06); color: white; font-size: 1rem;
         }
         .modal-close-button:hover { background: rgba(255,255,255,0.1); }
-        .details-stack, .import-form { display: flex; flex-direction: column; gap: 14px; }
+        .details-stack, .import-form, .task-form { display: flex; flex-direction: column; gap: 14px; }
         .details-card {
           padding: 18px; border-radius: 18px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.05);
         }
         .details-time { margin: 0 0 8px 0; color: #bfdbfe; font-size: 0.88rem; font-weight: 700; }
         .details-title { margin: 0 0 8px 0; font-size: 1rem; font-weight: 800; }
         .details-meta { margin: 0; color: var(--muted); line-height: 1.6; font-size: 0.92rem; }
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
         .form-group { display: flex; flex-direction: column; gap: 8px; }
         .form-label { font-size: 0.9rem; color: #dbe6f5; font-weight: 600; }
         .form-input {
           width: 100%; background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--text);
           padding: 13px 14px; border-radius: 14px; outline: none;
+        }
+        .form-input::placeholder { color: var(--muted); }
+        .form-error {
+          margin: 0; padding: 12px 14px; border-radius: 14px; background: rgba(239,68,68,0.12);
+          border: 1px solid rgba(239,68,68,0.24); color: #fecaca; font-size: 0.9rem;
         }
         .import-status { margin: 0; color: var(--muted); line-height: 1.5; }
         .option-row { display: flex; gap: 12px; flex-wrap: wrap; }
@@ -575,6 +640,7 @@ function App() {
           .overview-grid { grid-template-columns: 1fr; }
           .calendar-weekdays, .calendar-grid { grid-template-columns: 1fr; }
           .page-title { font-size: 2.4rem; }
+          .form-row { grid-template-columns: 1fr; }
         }
       `}</style>
 
@@ -598,12 +664,12 @@ function App() {
           </nav>
 
           <div className="sidebar-card">
-            <h3 className="sidebar-card-title">Good schedule import</h3>
+            <h3 className="sidebar-card-title">Quick action</h3>
             <p className="sidebar-card-text">
-              Upload a file in a dedicated modal. Dashboard stays clean. Calendar structure stays exactly the same.
+              Add a custom study task with title, subject, day, time, priority and tag.
             </p>
-            <button className="sidebar-card-button" onClick={() => setIsImportModalOpen(true)}>
-              Open import
+            <button className="sidebar-card-button" onClick={openTaskModal}>
+              Add task
             </button>
           </div>
         </aside>
@@ -625,6 +691,9 @@ function App() {
               <button className="secondary-button" onClick={() => setIsImportModalOpen(true)}>
                 Import schedule
               </button>
+              <button className="primary-button" onClick={openTaskModal}>
+                New Task
+              </button>
               <div className="avatar">X</div>
             </div>
           </header>
@@ -634,7 +703,7 @@ function App() {
               <section className="page-header">
                 <h2 className="page-title">Dashboard</h2>
                 <p className="page-subtitle">
-                  Clean dashboard with separate schedule import. Calendar logic is preserved and not mixed into the main screen.
+                  Clean dashboard with task creation, separate schedule import and stable semester calendar.
                 </p>
               </section>
 
@@ -668,6 +737,9 @@ function App() {
                         <h3 className="panel-title">Today's Tasks</h3>
                         <p className="panel-subtitle">Task preview for the current frontend shell</p>
                       </div>
+                      <button className="primary-button" onClick={openTaskModal}>
+                        Add task
+                      </button>
                     </div>
 
                     <div className="task-list">
@@ -716,8 +788,8 @@ function App() {
                         <h3 className="panel-title">Calendar Integration</h3>
                         <p className="panel-subtitle">Import from external sources without changing dashboard structure</p>
                       </div>
-                      <button className="primary-button" onClick={() => setActivePage('calendar')}>
-                        Open calendar
+                      <button className="secondary-button" onClick={() => setIsImportModalOpen(true)}>
+                        Import schedule
                       </button>
                     </div>
 
@@ -751,7 +823,7 @@ function App() {
                         <div>
                           <p className="task-title">Keep tasks and classes in one workspace</p>
                           <p className="empty-note">
-                            The calendar page already preserves semester logic and click-to-open details.
+                            Newly created tasks now appear immediately in Dashboard and Tasks.
                           </p>
                         </div>
                       </article>
@@ -891,15 +963,19 @@ function App() {
             <>
               <section className="page-header">
                 <h2 className="page-title">Tasks</h2>
-                <p className="page-subtitle">Task manager stays untouched and connected to the same shell.</p>
+                <p className="page-subtitle">Create, review and complete your study tasks.</p>
               </section>
 
               <section className="panel">
                 <div className="panel-header">
                   <div>
                     <h3 className="panel-title">Task List</h3>
-                    <p className="panel-subtitle">Later imported schedule rows can generate reminders here.</p>
+                    <p className="panel-subtitle">New tasks are added locally and displayed immediately.</p>
                   </div>
+
+                  <button className="primary-button" onClick={openTaskModal}>
+                    Add task
+                  </button>
                 </div>
 
                 <div className="task-list">
@@ -964,7 +1040,7 @@ function App() {
                   <span className="feature-label">Feature in development</span>
                   <h3 className="feature-title">Task + calendar sync</h3>
                   <p className="feature-text">
-                    Import flow is separate and does not break the dashboard or the task pages.
+                    Import flow and task creation are separated, so the dashboard stays stable.
                   </p>
                 </article>
               </section>
@@ -972,6 +1048,108 @@ function App() {
           )}
         </main>
       </div>
+
+      {isTaskModalOpen && (
+        <div className="modal-overlay" onClick={closeTaskModal}>
+          <div className="details-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <h3 className="modal-title">Create new task</h3>
+                <p className="modal-subtitle">
+                  Add a study task. It will appear in Dashboard and Tasks immediately.
+                </p>
+              </div>
+
+              <button className="modal-close-button" onClick={closeTaskModal}>✕</button>
+            </div>
+
+            <div className="task-form">
+              {taskFormError && <p className="form-error">{taskFormError}</p>}
+
+              <div className="form-group">
+                <label className="form-label">Task title</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="Например: закончить отчёт по базе данных"
+                  value={newTaskTitle}
+                  onChange={(event) => setNewTaskTitle(event.target.value)}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Subject / course</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="Например: Databases"
+                  value={newTaskCourse}
+                  onChange={(event) => setNewTaskCourse(event.target.value)}
+                />
+              </div>
+
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="form-label">Day</label>
+                  <input
+                    className="form-input"
+                    type="text"
+                    placeholder="Например: Monday"
+                    value={newTaskDay}
+                    onChange={(event) => setNewTaskDay(event.target.value)}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Time</label>
+                  <input
+                    className="form-input"
+                    type="text"
+                    placeholder="Например: 18:00"
+                    value={newTaskTime}
+                    onChange={(event) => setNewTaskTime(event.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="form-label">Priority</label>
+                  <select
+                    className="form-input"
+                    value={newTaskPriority}
+                    onChange={(event) => setNewTaskPriority(event.target.value as TaskPriority)}
+                  >
+                    <option value="High">High</option>
+                    <option value="Medium">Medium</option>
+                    <option value="Low">Low</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Custom tag</label>
+                  <input
+                    className="form-input"
+                    type="text"
+                    placeholder="Lab / Exam / Report"
+                    value={newTaskTag}
+                    onChange={(event) => setNewTaskTag(event.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-actions">
+              <button className="ghost-button" onClick={closeTaskModal}>
+                Cancel
+              </button>
+              <button className="primary-button" onClick={createTask}>
+                Create task
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {selectedDay && (
         <div className="modal-overlay" onClick={closeDayDetails}>
@@ -1029,9 +1207,9 @@ function App() {
           <div className="details-modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <h3 className="modal-title">Good schedule import for the user</h3>
+                <h3 className="modal-title">Import schedule</h3>
                 <p className="modal-subtitle">
-                  User-friendly import flow: choose a file, choose import mode, understand what will happen, keep the same calendar view.
+                  Upload a schedule file. Current frontend only stores the selected source label.
                 </p>
               </div>
 
@@ -1061,23 +1239,9 @@ function App() {
               </div>
 
               <div className="details-card">
-                <p className="details-title">What the user gets</p>
-                <p className="details-meta">
-                  The calendar remains month-based, keeps compact info on day cards, and still opens a full day popup on click.
-                </p>
-              </div>
-
-              <div className="details-card">
-                <p className="details-title">Why this is good UX</p>
-                <p className="details-meta">
-                  Import is separate, clear and understandable. It does not throw the user out of the current interface and does not destroy dashboard structure.
-                </p>
-              </div>
-
-              <div className="details-card">
                 <p className="details-title">Current stage</p>
                 <p className="details-meta">
-                  Right now import updates the source label only. Later backend will parse the uploaded workbook and replace the semester template with real classes.
+                  Later backend will parse the uploaded workbook and replace the semester template with real classes.
                 </p>
               </div>
             </div>
