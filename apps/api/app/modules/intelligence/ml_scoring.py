@@ -5,11 +5,7 @@ from datetime import datetime, timedelta, timezone
 from statistics import mean
 
 from app.modules.knowledge.models import Event, Task
-
-try:
-    from sklearn.linear_model import SGDRegressor
-except Exception:  # pragma: no cover - fallback for environments without sklearn
-    SGDRegressor = None
+from sklearn.linear_model import SGDRegressor
 
 
 @dataclass
@@ -21,6 +17,15 @@ class TrainingSample:
 
 
 class MLScoringService:
+    """
+    Сервис скоринга задач на базе ML-регрессии.
+
+    Важно:
+    - Модель используется всегда (даже "с нуля"), потому что мы делаем
+      стартовую калибровку на синтетических данных.
+    - Далее модель дообучается на реальных действиях пользователя.
+    """
+
     def __init__(
         self,
         wake_start_hour: int,
@@ -35,22 +40,19 @@ class MLScoringService:
         self.retrain_batch_size = retrain_batch_size
         self.overdue_bonus = overdue_bonus
 
-        self._model = (
-            SGDRegressor(
-                loss="squared_error",
-                penalty="l2",
-                random_state=42,
-                max_iter=1000,
-                tol=1e-3,
-                learning_rate="optimal",
-            )
-            if SGDRegressor is not None
-            else None
+        self._model = SGDRegressor(
+            loss="squared_error",
+            penalty="l2",
+            random_state=42,
+            max_iter=2000,
+            tol=1e-3,
+            learning_rate="optimal",
         )
         self._is_fitted = False
 
         self._pending_samples: list[TrainingSample] = []
         self.last_scores: dict[str, float] = {}
+        self._bootstrap_model()
 
     @property
     def pending_samples_count(self) -> int:
@@ -72,10 +74,9 @@ class MLScoringService:
         return score_map
 
     def score_single_task(self, task: Task, events: list[Event], now: datetime) -> float:
+        # Всегда считаем через ML-модель.
         features = self._task_features(task=task, events=events, now=now)
-        if self._model is not None and self._is_fitted:
-            return float(self._model.predict([features])[0])
-        return self._fallback_score(task=task, now=now)
+        return float(self._model.predict([features])[0])
 
     def record_reorder_feedback(
         self,
@@ -136,14 +137,18 @@ class MLScoringService:
         features_batch = [sample.features for sample in self._pending_samples]
         targets_batch = [sample.target for sample in self._pending_samples]
 
-        if self._model is not None:
-            self._model.partial_fit(features_batch, targets_batch)
-            self._is_fitted = True
+        # Дообучаем модель пачкой накопленных пользовательских примеров.
+        self._model.partial_fit(features_batch, targets_batch)
+        self._is_fitted = True
 
         self._pending_samples.clear()
         return True
 
     def _task_features(self, task: Task, events: list[Event], now: datetime) -> list[float]:
+        # Набор признаков по ТЗ:
+        # 1) свободные минуты до дедлайна,
+        # 2) пользовательский приоритет,
+        # 3) оценка времени задачи.
         free_minutes = self._time_to_deadline_free_minutes(task=task, events=events, now=now)
         user_priority = float(task.priority)
         estimate_minutes = float(task.estimated_minutes)
@@ -234,37 +239,62 @@ class MLScoringService:
             if not blockers or task.id not in base_scores:
                 continue
 
+            # Правило зависимостей:
+            # score(T) = mean(score(T), score(B1), score(B2), ...)
             dependent_score = mean(
                 [base_scores[task.id], *[base_scores[item.id] for item in blockers]]
             )
             score_map[task.id] = dependent_score
 
+            # Для блокирующих задач повышаем приоритет: score(Bi) = score(T) + 1.
             blocker_target = dependent_score + 1.0
             for blocker in blockers:
                 score_map[blocker.id] = max(score_map[blocker.id], blocker_target)
-
-    @staticmethod
-    def _fallback_score(task: Task, now: datetime) -> float:
-        current = MLScoringService._to_utc(now)
-        priority_score = (5 - task.priority) * 20
-
-        if task.deadline is None:
-            urgency_score = 25
-        else:
-            hours_left = (MLScoringService._to_utc(task.deadline) - current).total_seconds() / 3600
-            if hours_left <= 0:
-                urgency_score = 120
-            elif hours_left <= 24:
-                urgency_score = 95
-            elif hours_left <= 72:
-                urgency_score = 70
-            else:
-                urgency_score = 40
-
-        return float(priority_score + urgency_score)
 
     @staticmethod
     def _to_utc(value: datetime) -> datetime:
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
+
+    def _bootstrap_model(self) -> None:
+        """
+        Стартовая калибровка:
+        обучаем модель на синтетике, чтобы ML работал сразу после запуска.
+        """
+        bootstrap_features: list[list[float]] = []
+        bootstrap_targets: list[float] = []
+
+        free_minutes_values = [60, 240, 720, 1440, 2880, 7200, 14400, 28800, 43200]
+        priorities = [1, 2, 3, 4]
+        estimates = [30, 60, 90, 120, 180, 240]
+
+        for free_minutes in free_minutes_values:
+            for priority in priorities:
+                for estimate in estimates:
+                    bootstrap_features.append([float(free_minutes), float(priority), float(estimate)])
+                    bootstrap_targets.append(
+                        self._initial_target(
+                            free_minutes=float(free_minutes),
+                            priority=float(priority),
+                            estimated_minutes=float(estimate),
+                        )
+                    )
+
+        self._model.fit(bootstrap_features, bootstrap_targets)
+        self._is_fitted = True
+
+    @staticmethod
+    def _initial_target(
+        free_minutes: float,
+        priority: float,
+        estimated_minutes: float,
+    ) -> float:
+        """
+        Начальная формула "здравого смысла":
+        - чем меньше свободного времени до дедлайна, тем выше score;
+        - чем "важнее" задача для пользователя (priority=1), тем выше score;
+        - более длинные задачи немного повышаем, чтобы не откладывались бесконечно.
+        """
+        raw = 220.0 - (0.006 * free_minutes) - (18.0 * priority) + (0.05 * estimated_minutes)
+        return max(0.0, min(200.0, raw))

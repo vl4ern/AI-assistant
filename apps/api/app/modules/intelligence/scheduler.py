@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 import math
 
 from app.modules.intelligence.models import SchedulePlan, ScheduledSlot
-from app.modules.intelligence.scoring import score_task
 from app.modules.knowledge.models import Event, Task
 
 
@@ -57,24 +56,14 @@ class GreedyScheduler:
 
         free_windows = self._find_free_windows(current, horizon_end, fixed_busy_intervals)
 
-        if task_scores is None:
-            ranked = sorted(
-                [(score_task(task, current), task) for task in candidates],
-                key=lambda item: item[0],
-                reverse=True,
-            )
-        else:
-            ranked = sorted(
-                [
-                    (
-                        float(task_scores.get(task.id, score_task(task, current))),
-                        task,
-                    )
-                    for task in candidates
-                ],
-                key=lambda item: item[0],
-                reverse=True,
-            )
+        # Планировщик сам score не считает:
+        # он принимает score_map от ML-модуля и только "раскладывает" задачи по окнам.
+        score_map = task_scores or {}
+        ranked = sorted(
+            [(float(score_map.get(task.id, 0.0)), task) for task in candidates],
+            key=lambda item: item[0],
+            reverse=True,
+        )
 
         scheduled_slots: list[ScheduledSlot] = []
         unscheduled_task_ids: list[str] = []

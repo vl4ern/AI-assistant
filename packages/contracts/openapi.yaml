@@ -2,100 +2,204 @@ openapi: 3.1.0
 info:
   title: AI Assistant API
   version: 0.1.0
+  description: >-
+    Контракт backend API для модульного взаимодействия frontend, intelligence,
+    knowledge и integrations.
 servers:
   - url: http://localhost:8000
+
+tags:
+  - name: health
+  - name: tasks
+  - name: schedule
+  - name: integrations
+
 paths:
   /health:
     get:
+      tags: [health]
       summary: Health check
+      operationId: healthcheck
       responses:
         "200":
-          description: OK
+          description: API is alive
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                  service:
-                    type: string
-                  version:
-                    type: string
+                $ref: "#/components/schemas/HealthResponse"
 
   /v1/tasks:
     get:
+      tags: [tasks]
       summary: List tasks
+      operationId: listTasks
       responses:
         "200":
           description: Tasks list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Task"
     post:
+      tags: [tasks]
       summary: Create task
-      description: Supports optional split planning fields allow_split and min_chunk_minutes.
+      operationId: createTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskCreate"
       responses:
         "201":
           description: Task created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "422":
+          $ref: "#/components/responses/ValidationError"
 
   /v1/tasks/{task_id}/status:
     patch:
+      tags: [tasks]
       summary: Update task status
+      operationId: updateTaskStatus
       parameters:
         - in: path
           name: task_id
           required: true
           schema:
             type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskStatusUpdate"
       responses:
         "200":
           description: Task updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
         "404":
-          description: Not found
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
 
   /v1/events:
     get:
+      tags: [tasks]
       summary: List events
+      operationId: listEvents
       responses:
         "200":
           description: Events list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Event"
     post:
+      tags: [tasks]
       summary: Create event
+      operationId: createEvent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EventCreate"
       responses:
         "201":
           description: Event created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Event"
+        "422":
+          $ref: "#/components/responses/ValidationError"
 
   /v1/schedule/rebuild:
     post:
+      tags: [schedule]
       summary: Rebuild schedule
+      description: >-
+        Пересчитывает план по задачам/событиям с учетом ML-score,
+        зависимостей и greedy-раскладки.
+      operationId: rebuildSchedule
       responses:
         "200":
           description: Schedule plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SchedulePlan"
 
   /v1/schedule/today:
     get:
-      summary: Today view
+      tags: [schedule]
+      summary: Get today view
+      operationId: getToday
       responses:
         "200":
-          description: Tasks planned for today
+          description: Tasks planned for current day
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TodayView"
 
   /v1/schedule/reorder-feedback:
     post:
-      summary: Record manual task reorder feedback for ML retraining
+      tags: [schedule]
+      summary: Record manual reorder feedback
+      description: >-
+        Добавляет обучающий пример после ручного перемещения задачи
+        пользователем.
+      operationId: reorderFeedback
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReorderFeedbackRequest"
       responses:
         "200":
           description: Feedback accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReorderFeedbackResult"
         "404":
-          description: Task not found
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
 
   /v1/integrations:
     get:
+      tags: [integrations]
       summary: List available providers
+      operationId: listIntegrations
       responses:
         "200":
           description: Providers list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
 
   /v1/integrations/{provider_name}/sync:
     post:
+      tags: [integrations]
       summary: Sync provider
+      operationId: syncProvider
       parameters:
         - in: path
           name: provider_name
@@ -105,5 +209,331 @@ paths:
       responses:
         "200":
           description: Sync result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntegrationSyncResult"
         "404":
-          description: Provider not found
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+components:
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            detail: Task not found
+    ValidationError:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/HTTPValidationError"
+
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        service:
+          type: string
+        version:
+          type: string
+      required:
+        - status
+        - service
+        - version
+
+    ErrorResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+      required:
+        - detail
+
+    TaskStatus:
+      type: string
+      enum: [todo, in_progress, completed, cancelled, blocked]
+
+    TaskCreate:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          anyOf:
+            - type: string
+            - type: "null"
+        estimated_minutes:
+          type: integer
+          minimum: 15
+          maximum: 1440
+          default: 60
+        priority:
+          type: integer
+          minimum: 1
+          maximum: 4
+          default: 3
+        deadline:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        workspace_id:
+          type: string
+          default: study
+        project_id:
+          anyOf:
+            - type: string
+            - type: "null"
+        auto_reschedule:
+          type: boolean
+          default: true
+        depends_on:
+          type: array
+          items:
+            type: string
+          default: []
+        allow_split:
+          type: boolean
+          default: false
+        min_chunk_minutes:
+          anyOf:
+            - type: integer
+              minimum: 15
+              maximum: 1440
+            - type: "null"
+      required:
+        - title
+
+    Task:
+      allOf:
+        - $ref: "#/components/schemas/TaskCreate"
+        - type: object
+          properties:
+            id:
+              type: string
+            status:
+              $ref: "#/components/schemas/TaskStatus"
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+            scheduled_start:
+              anyOf:
+                - type: string
+                  format: date-time
+                - type: "null"
+            scheduled_end:
+              anyOf:
+                - type: string
+                  format: date-time
+                - type: "null"
+          required:
+            - id
+            - status
+            - created_at
+            - updated_at
+
+    TaskStatusUpdate:
+      type: object
+      properties:
+        status:
+          $ref: "#/components/schemas/TaskStatus"
+      required:
+        - status
+
+    EventCreate:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        start_at:
+          type: string
+          format: date-time
+        end_at:
+          type: string
+          format: date-time
+        source:
+          type: string
+          default: manual
+      required:
+        - title
+        - start_at
+        - end_at
+
+    Event:
+      allOf:
+        - $ref: "#/components/schemas/EventCreate"
+        - type: object
+          properties:
+            id:
+              type: string
+          required:
+            - id
+
+    ScheduledSlot:
+      type: object
+      properties:
+        task_id:
+          type: string
+        title:
+          type: string
+        start_at:
+          type: string
+          format: date-time
+        end_at:
+          type: string
+          format: date-time
+        score:
+          type: number
+      required:
+        - task_id
+        - title
+        - start_at
+        - end_at
+        - score
+
+    SchedulePlan:
+      type: object
+      properties:
+        generated_at:
+          type: string
+          format: date-time
+        slots:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScheduledSlot"
+        unscheduled_task_ids:
+          type: array
+          items:
+            type: string
+        prime_task_id:
+          anyOf:
+            - type: string
+            - type: "null"
+      required:
+        - generated_at
+        - slots
+        - unscheduled_task_ids
+        - prime_task_id
+
+    TodayView:
+      type: object
+      properties:
+        date:
+          type: string
+        prime_task_id:
+          anyOf:
+            - type: string
+            - type: "null"
+        tasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/Task"
+        schedule_dirty:
+          type: boolean
+      required:
+        - date
+        - prime_task_id
+        - tasks
+        - schedule_dirty
+
+    ReorderFeedbackRequest:
+      type: object
+      properties:
+        moved_task_id:
+          type: string
+        left_task_id:
+          anyOf:
+            - type: string
+            - type: "null"
+        right_task_id:
+          anyOf:
+            - type: string
+            - type: "null"
+        moved_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+      required:
+        - moved_task_id
+
+    ReorderFeedbackResult:
+      type: object
+      properties:
+        moved_task_id:
+          type: string
+        target_score:
+          type: number
+        samples_in_batch:
+          type: integer
+        retrained:
+          type: boolean
+      required:
+        - moved_task_id
+        - target_score
+        - samples_in_batch
+        - retrained
+
+    IntegrationSyncResult:
+      type: object
+      properties:
+        provider:
+          type: string
+        imported_items:
+          type: integer
+        updated_items:
+          type: integer
+        warnings:
+          type: array
+          items:
+            type: string
+          default: []
+      required:
+        - provider
+        - imported_items
+        - updated_items
+
+    ValidationError:
+      type: object
+      properties:
+        loc:
+          type: array
+          items:
+            anyOf:
+              - type: string
+              - type: integer
+        msg:
+          type: string
+        type:
+          type: string
+        input: {}
+        ctx:
+          type: object
+      required:
+        - loc
+        - msg
+        - type
+
+    HTTPValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            $ref: "#/components/schemas/ValidationError"

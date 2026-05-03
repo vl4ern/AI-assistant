@@ -38,7 +38,15 @@ def test_scheduler_places_high_priority_before_low_priority() -> None:
         wake_start_hour=8,
         wake_end_hour=22,
     )
-    plan = scheduler.build_plan(tasks=tasks, events=events, now=now)
+    plan = scheduler.build_plan(
+        tasks=tasks,
+        events=events,
+        now=now,
+        task_scores={
+            tasks[0].id: 10.0,   # Low
+            tasks[1].id: 100.0,  # High
+        },
+    )
 
     assert len(plan.slots) == 2
     assert plan.slots[0].title == "High"

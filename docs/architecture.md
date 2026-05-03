@@ -26,7 +26,7 @@
 - Не содержит сложной бизнес-логики.
 
 2. Модули предметной области (`app/modules`)
-- `intelligence`: планировщик, scoring, prime-task.
+- `intelligence`: планировщик, ML-scoring, prime-task и feedback для дообучения.
 - `knowledge`: модели задач/событий и репозиторий.
 - `integrations`: провайдеры внешних сервисов и sync-операции.
 

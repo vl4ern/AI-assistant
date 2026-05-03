@@ -4,7 +4,7 @@
 
 1. Интеллект ассистента
 - Папка: `apps/api/app/modules/intelligence`
-- Ответственность: scoring, planner, пересчет расписания, prime-task.
+- Ответственность: ML-scoring, planner, пересчет расписания, prime-task, feedback.
 - Основные API: `/v1/schedule/*`.
 
 2. Frontend
