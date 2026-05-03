@@ -17,7 +17,7 @@
 AI-assistant/
   apps/
     api/                # FastAPI backend (intelligence + knowledge + integrations)
-    web/                # Next.js frontend
+    web/                # Frontend модуль (активное приложение: apps/web/frontend, React + Vite)
   docs/
     architecture.md
     team-workflow.md
@@ -47,22 +47,26 @@ AI-assistant/
 
 ## Быстрый запуск (локально)
 
-1. Скопировать переменные окружения:
+1. Перейти в проект:
+   ```bash
+   cd AI-assistant
+   ```
+2. Скопировать переменные окружения:
    ```bash
    cp .env.example .env
    ```
-2. Запустить backend:
+3. Запустить backend:
    ```bash
    make api-install
    make api-dev
    ```
-3. В другом терминале запустить frontend:
+4. В другом терминале запустить frontend:
    ```bash
    make web-install
    make web-dev
    ```
-4. Открыть:
-   - Frontend: `http://localhost:3000`
+5. Открыть:
+   - Frontend: `http://localhost:5173`
    - API docs: `http://localhost:8000/docs`
 
 ## Запуск через Docker

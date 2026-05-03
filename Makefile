@@ -12,13 +12,13 @@ api-test:
 	PYTHONPATH=apps/api ./.venv/bin/pytest apps/api/tests -q
 
 web-install:
-	cd apps/web && npm ci
+	cd apps/web/frontend && npm ci
 
 web-dev:
-	cd apps/web && npm run dev
+	cd apps/web/frontend && npm run dev -- --host 0.0.0.0 --port 5173
 
 web-lint:
-	cd apps/web && npm run lint
+	cd apps/web/frontend && npm run lint
 
 compose-up:
 	docker compose up --build

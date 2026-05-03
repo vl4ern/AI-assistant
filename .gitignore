@@ -16,6 +16,8 @@ apps/api/.venv/
 node_modules/
 apps/web/.next/
 apps/web/out/
+apps/web/frontend/dist/
+apps/web/frontend/node_modules/
 
 # Env
 .env
@@ -24,3 +26,6 @@ apps/web/out/
 
 # Logs
 *.log
+
+# Windows download metadata
+*:Zone.Identifier

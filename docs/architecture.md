@@ -13,7 +13,7 @@
 
 ## Технологический стек v1
 
-- Frontend: Next.js + TypeScript
+- Frontend: React + Vite + TypeScript
 - Backend API: FastAPI + Pydantic
 - База данных (следующий шаг): PostgreSQL
 - Интеграции: provider-based подход (Google, GitHub, LMS)
