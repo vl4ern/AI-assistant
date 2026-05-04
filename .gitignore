@@ -29,3 +29,6 @@ apps/web/frontend/node_modules/
 
 # Windows download metadata
 *:Zone.Identifier
+
+GenerateFile.py
+all_code.txt
