@@ -1,11 +1,14 @@
-import { useMemo, useState, type ChangeEvent } from 'react';
+import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
+
+import { createTask as createTaskApi, getTasks, updateTaskStatus } from './api/tasks';
+import type { ApiTask, ApiTaskCreate } from './types/api';
 
 type Page = 'dashboard' | 'tasks' | 'calendar' | 'projects' | 'analytics' | 'settings';
 type TaskPriority = 'High' | 'Medium' | 'Low';
 type ImportMode = 'smart' | 'classes' | 'exams';
 
 type Task = {
-  id: number;
+  id: string;
   title: string;
   course: string;
   deadline: string;
@@ -42,7 +45,7 @@ const navItems: Array<{ id: Page; label: string }> = [
 
 const initialTasks: Task[] = [
   {
-    id: 1,
+    id: 'demo-1',
     title: 'Finish database report',
     course: 'Databases',
     deadline: 'Today, 18:00',
@@ -51,7 +54,7 @@ const initialTasks: Task[] = [
     completed: false,
   },
   {
-    id: 2,
+    id: 'demo-2',
     title: 'Read AI lecture notes',
     course: 'Artificial Intelligence',
     deadline: 'Tomorrow, 11:00',
@@ -60,7 +63,7 @@ const initialTasks: Task[] = [
     completed: false,
   },
   {
-    id: 3,
+    id: 'demo-3',
     title: 'Prepare web project structure',
     course: 'Web Development',
     deadline: 'Friday, 14:00',
@@ -69,7 +72,7 @@ const initialTasks: Task[] = [
     completed: true,
   },
   {
-    id: 4,
+    id: 'demo-4',
     title: 'Review math homework',
     course: 'Discrete Math',
     deadline: 'Saturday, 09:00',
@@ -275,10 +278,82 @@ function getDaySummary(date: Date): { line1: string; line2: string } {
   };
 }
 
+
+function mapApiPriorityToUiPriority(priority: number): TaskPriority {
+  if (priority <= 1) {
+    return 'High';
+  }
+
+  if (priority === 2) {
+    return 'Medium';
+  }
+
+  return 'Low';
+}
+
+function mapUiPriorityToApiPriority(priority: TaskPriority): number {
+  if (priority === 'High') {
+    return 1;
+  }
+
+  if (priority === 'Medium') {
+    return 2;
+  }
+
+  return 3;
+}
+
+function formatDeadline(deadline: string | null): string {
+  if (!deadline) {
+    return 'No deadline';
+  }
+
+  const date = new Date(deadline);
+
+  if (Number.isNaN(date.getTime())) {
+    return 'Invalid deadline';
+  }
+
+  return date.toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function buildDeadlineIso(day: string, time: string): string | null {
+  if (!day || !time) {
+    return null;
+  }
+
+  const date = new Date(`${day}T${time}:00`);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date.toISOString();
+}
+
+function mapApiTaskToUiTask(task: ApiTask): Task {
+  return {
+    id: task.id,
+    title: task.title,
+    course: task.workspace_id || 'Study',
+    deadline: formatDeadline(task.deadline),
+    priority: mapApiPriorityToUiPriority(task.priority),
+    customTag: task.project_id || 'Backend',
+    completed: task.status === 'completed',
+  };
+}
+
 function App() {
   const [activePage, setActivePage] = useState<Page>('dashboard');
   const [searchValue, setSearchValue] = useState('');
-  const [tasks, setTasks] = useState<Task[]>(initialTasks);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [isTasksLoading, setIsTasksLoading] = useState(false);
+  const [tasksError, setTasksError] = useState('');
   const [currentMonthIndex, setCurrentMonthIndex] = useState(0);
   const [selectedDay, setSelectedDay] = useState<DayDetails | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -297,6 +372,26 @@ function App() {
   const [taskFormError, setTaskFormError] = useState('');
 
   const currentMonth = semesterMonths[currentMonthIndex];
+
+  useEffect(() => {
+    async function loadTasks(): Promise<void> {
+      try {
+        setIsTasksLoading(true);
+        setTasksError('');
+
+        const apiTasks = await getTasks();
+
+        setTasks(apiTasks.map(mapApiTaskToUiTask));
+      } catch {
+        setTasksError('Failed to load tasks from backend. Check that API is running on http://localhost:8000.');
+      } finally {
+        setIsTasksLoading(false);
+      }
+    }
+
+    loadTasks();
+  }, []);
+
 
   const monthCells = useMemo(() => getMonthGrid(currentMonth.year, currentMonth.month), [currentMonth]);
   const activeTasksCount = useMemo(() => tasks.filter((task) => !task.completed).length, [tasks]);
@@ -319,12 +414,41 @@ function App() {
     });
   }, [tasks, searchValue]);
 
-  function toggleTask(taskId: number): void {
+  async function toggleTask(taskId: string): Promise<void> {
+    const currentTask = tasks.find((task) => task.id === taskId);
+
+    if (!currentTask) {
+      return;
+    }
+
+    const nextCompleted = !currentTask.completed;
+    const nextStatus = nextCompleted ? 'completed' : 'todo';
+
     setTasks((prevTasks) =>
       prevTasks.map((task) =>
-        task.id === taskId ? { ...task, completed: !task.completed } : task
+        task.id === taskId ? { ...task, completed: nextCompleted } : task
       )
     );
+
+    try {
+      setTasksError('');
+
+      const updatedTask = await updateTaskStatus(taskId, nextStatus);
+
+      setTasks((prevTasks) =>
+        prevTasks.map((task) =>
+          task.id === taskId ? mapApiTaskToUiTask(updatedTask) : task
+        )
+      );
+    } catch {
+      setTasksError('Failed to update task status on backend.');
+
+      setTasks((prevTasks) =>
+        prevTasks.map((task) =>
+          task.id === taskId ? { ...task, completed: currentTask.completed } : task
+        )
+      );
+    }
   }
 
   function openTaskModal(): void {
@@ -343,12 +467,12 @@ function App() {
     setTaskFormError('');
   }
 
-  function createTask(): void {
+  async function createTask(): Promise<void> {
     const title = newTaskTitle.trim();
-    const course = newTaskCourse.trim() || 'Personal';
+    const course = newTaskCourse.trim() || 'study';
     const day = newTaskDay.trim();
     const time = newTaskTime.trim();
-    const tag = newTaskTag.trim() || 'Custom';
+    const tag = newTaskTag.trim() || null;
 
     if (!title) {
       setTaskFormError('Enter task title.');
@@ -360,21 +484,39 @@ function App() {
       return;
     }
 
-    const nextId = tasks.length > 0 ? Math.max(...tasks.map((task) => task.id)) + 1 : 1;
+    const deadline = buildDeadlineIso(day, time);
 
-    const createdTask: Task = {
-      id: nextId,
+    if (!deadline) {
+      setTaskFormError('Enter a valid day and time.');
+      return;
+    }
+
+    const payload: ApiTaskCreate = {
       title,
-      course,
-      deadline: `${day}, ${time}`,
-      priority: newTaskPriority,
-      customTag: tag,
-      completed: false,
+      description: null,
+      estimated_minutes: 60,
+      priority: mapUiPriorityToApiPriority(newTaskPriority),
+      deadline,
+      workspace_id: course,
+      project_id: tag,
+      auto_reschedule: true,
+      depends_on: [],
+      allow_split: false,
+      min_chunk_minutes: null,
     };
 
-    setTasks((prevTasks) => [createdTask, ...prevTasks]);
-    setActivePage('tasks');
-    closeTaskModal();
+    try {
+      setTaskFormError('');
+      setTasksError('');
+
+      const createdTask = await createTaskApi(payload);
+
+      setTasks((prevTasks) => [mapApiTaskToUiTask(createdTask), ...prevTasks]);
+      setActivePage('tasks');
+      closeTaskModal();
+    } catch {
+      setTaskFormError('Failed to create task on backend.');
+    }
   }
 
   function openDayDetails(date: Date): void {
@@ -743,6 +885,14 @@ function App() {
                     </div>
 
                     <div className="task-list">
+                      {isTasksLoading && (
+                        <p className="empty-note">Loading tasks from backend...</p>
+                      )}
+
+                      {tasksError && (
+                        <p className="form-error">{tasksError}</p>
+                      )}
+
                       {filteredTasks.map((task) => (
                         <article
                           key={task.id}
@@ -979,6 +1129,14 @@ function App() {
                 </div>
 
                 <div className="task-list">
+                  {isTasksLoading && (
+                    <p className="empty-note">Loading tasks from backend...</p>
+                  )}
+
+                  {tasksError && (
+                    <p className="form-error">{tasksError}</p>
+                  )}
+
                   {filteredTasks.map((task) => (
                     <article
                       key={task.id}
@@ -1093,8 +1251,7 @@ function App() {
                   <label className="form-label">Day</label>
                   <input
                     className="form-input"
-                    type="text"
-                    placeholder="Например: Monday"
+                    type="date"
                     value={newTaskDay}
                     onChange={(event) => setNewTaskDay(event.target.value)}
                   />
@@ -1104,8 +1261,7 @@ function App() {
                   <label className="form-label">Time</label>
                   <input
                     className="form-input"
-                    type="text"
-                    placeholder="Например: 18:00"
+                    type="time"
                     value={newTaskTime}
                     onChange={(event) => setNewTaskTime(event.target.value)}
                   />

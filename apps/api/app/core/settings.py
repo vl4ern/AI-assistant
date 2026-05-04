@@ -21,6 +21,16 @@ class AppSettings(BaseModel):
     ml_overdue_bonus: float = Field(
         default=float(os.getenv("ML_OVERDUE_BONUS", "10")), ge=0, le=10000
     )
+    database_url: str = os.getenv(
+        "DATABASE_URL",
+        "postgresql://postgres:postgres@localhost:5432/ai_assistant",
+    )
+    postgres_auto_init_schema: bool = os.getenv("POSTGRES_AUTO_INIT_SCHEMA", "true").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 settings = AppSettings()
