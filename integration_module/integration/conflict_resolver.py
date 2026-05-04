@@ -2,7 +2,10 @@ import uuid
 from datetime import datetime
 from typing import List, Tuple
 from models.task import Task
-from models.sync import ConflictNotification, ConflictResolutionStrategy
+from models.sync import (
+    ConflictNotification,
+    ConflictResolutionStrategy,
+)
 from integration.interfaces import ICacheStorage
 
 

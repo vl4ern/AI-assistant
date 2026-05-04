@@ -99,6 +99,11 @@ class SQLiteCacheStorage(ICacheStorage):
             conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         return True
 
+    def get_all_tasks(self) -> List[Task]:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT data FROM tasks")
+            return [Task.from_json(row[0]) for row in cursor.fetchall()]
+
     def get_version(self, task_id: str) -> int:
         task = self.get_task(task_id)
         return task.version if task else 0
