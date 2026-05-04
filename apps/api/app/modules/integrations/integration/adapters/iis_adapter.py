@@ -3,8 +3,8 @@ from datetime import datetime
 from typing import List, Optional
 
 from ..interfaces import IServiceAdapter
-from apps.api.app.modules.integrations.models.iis_models import IisScheduleItem
-from apps.api.app.modules.integrations.models.task import Task
+from app.modules.integrations.models.iis_models import IisScheduleItem
+from app.modules.integrations.models.task import Task
 
 
 class IisAdapter(IServiceAdapter):

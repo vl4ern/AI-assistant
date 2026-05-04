@@ -1,6 +1,6 @@
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from apps.api.app.modules.integrations.integration.sync_scheduler import SyncScheduler
+from app.modules.integrations.integration.sync_scheduler import SyncScheduler
 
 
 class SyncAPIHandler(BaseHTTPRequestHandler):

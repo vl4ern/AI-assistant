@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
 
-from apps.api.app.modules.integrations.models.task import Task, SourceType, TaskStatus
+from app.modules.integrations.models.task import Task, SourceType, TaskStatus
 
 
 @dataclass

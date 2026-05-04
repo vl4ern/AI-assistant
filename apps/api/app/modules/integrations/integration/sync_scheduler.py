@@ -2,11 +2,11 @@ import time
 import threading
 from datetime import datetime
 from typing import List, Dict, Optional
-from apps.api.app.modules.integrations.integration.interfaces import IServiceAdapter, ICacheStorage
-from apps.api.app.modules.integrations.integration.conflict_resolver import ConflictResolver
-from apps.api.app.modules.integrations.integration.retry_queue import RetryQueue
-from apps.api.app.modules.integrations.models.sync import SyncResult
-from apps.api.app.modules.integrations.models.task import Task
+from app.modules.integrations.integration.interfaces import IServiceAdapter, ICacheStorage
+from app.modules.integrations.integration.conflict_resolver import ConflictResolver
+from app.modules.integrations.integration.retry_queue import RetryQueue
+from app.modules.integrations.models.sync import SyncResult
+from app.modules.integrations.models.task import Task
 
 
 class SyncScheduler:

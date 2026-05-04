@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from dataclasses import dataclass, field
 
-from apps.api.app.modules.integrations.integration.interfaces import IServiceAdapter, ICacheStorage
+from app.modules.integrations.integration.interfaces import IServiceAdapter, ICacheStorage
 
 
 @dataclass
