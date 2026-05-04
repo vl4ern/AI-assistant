@@ -10,7 +10,7 @@ import math
 from app.modules.intelligence.models import SchedulePlan, ScheduledSlot
 # Импортируем модели сущностей из модуля knowledge (Task, Event)
 from app.modules.knowledge.models import Event, Task
-
+from app.modules.intelligence.utils.time_utils import build_working_windows
 
 class GreedyScheduler:
     """
@@ -241,7 +241,7 @@ class GreedyScheduler:
         3. Возвращаем только те окна, где длина > 0.
         """
         # Генерируем окна бодрствования по дням
-        working_windows = self._build_working_windows(start_at, end_at)
+        working_windows = build_working_windows(start_at, end_at, self.wake_start_hour, self.wake_end_hour)
         # Приводим все занятые интервалы к UTC и удаляем кривые (None, отрицательные)
         busy = self._normalize_intervals(busy_intervals)
 
@@ -253,50 +253,6 @@ class GreedyScheduler:
         # Оставляем только ненулевые окна (окно может схлопнуться после вычитаний)
         return [window for window in free_windows if window[1] > window[0]]
 
-    def _build_working_windows(
-        self,
-        start_at: datetime,
-        end_at: datetime,
-    ) -> list[tuple[datetime, datetime]]:
-        """
-        Генерирует рабочие интервалы (время бодрствования) на каждый день
-        от start_at до end_at.
-        """
-        windows: list[tuple[datetime, datetime]] = []
-        # Идём по дням, начиная с полуночи первого дня
-        day_cursor = start_at.replace(hour=0, minute=0, second=0, microsecond=0)
-
-        while day_cursor < end_at:
-            # Начало рабочего окна сегодня = этот день + час пробуждения
-            day_start = day_cursor.replace(
-                hour=self.wake_start_hour,
-                minute=0,
-                second=0,
-                microsecond=0,
-            )
-            # Конец рабочего окна: если wake_end_hour == 24, то это начало следующих суток,
-            # иначе – заданный час сегодня.
-            if self.wake_end_hour == 24:
-                day_end = day_cursor + timedelta(days=1)
-            else:
-                day_end = day_cursor.replace(
-                    hour=self.wake_end_hour,
-                    minute=0,
-                    second=0,
-                    microsecond=0,
-                )
-
-            # Обрезаем окно границами планирования (start_at, end_at)
-            window_start = max(day_start, start_at)
-            window_end = min(day_end, end_at)
-
-            # Добавляем, только если окно не пустое
-            if window_end > window_start:
-                windows.append((window_start, window_end))
-
-            day_cursor += timedelta(days=1)
-
-        return windows
 
     @staticmethod
     def _normalize_intervals(

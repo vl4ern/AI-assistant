@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 from statistics import mean
 
 from app.modules.knowledge.models import Event, Task
+from app.modules.intelligence.utils.time_utils import build_working_windows
+
 from sklearn.linear_model import SGDRegressor
 
 
@@ -48,7 +50,6 @@ class MLScoringService:
             tol=1e-3,
             learning_rate="optimal",
         )
-        self._is_fitted = False
 
         self._pending_samples: list[TrainingSample] = []
         self.last_scores: dict[str, float] = {}
@@ -140,7 +141,6 @@ class MLScoringService:
 
         # Дообучаем модель пачкой накопленных пользовательских примеров.
         self._model.partial_fit(features_batch, targets_batch)
-        self._is_fitted = True
 
         self._pending_samples.clear()
         return True
@@ -166,45 +166,12 @@ class MLScoringService:
         if deadline <= current:
             return 0.0
 
-        awake_windows = self._build_awake_windows(start_at=current, end_at=deadline)
+        awake_windows = build_working_windows(current, deadline, self.wake_start_hour, self.wake_end_hour)
         awake_minutes = sum((end - start).total_seconds() / 60 for start, end in awake_windows)
         busy_minutes = self._events_overlap_minutes(windows=awake_windows, events=events)
 
         return max(0.0, awake_minutes - busy_minutes)
 
-    def _build_awake_windows(
-        self,
-        start_at: datetime,
-        end_at: datetime,
-    ) -> list[tuple[datetime, datetime]]:
-        windows: list[tuple[datetime, datetime]] = []
-        day_cursor = start_at.replace(hour=0, minute=0, second=0, microsecond=0)
-
-        while day_cursor < end_at:
-            day_start = day_cursor.replace(
-                hour=self.wake_start_hour,
-                minute=0,
-                second=0,
-                microsecond=0,
-            )
-            if self.wake_end_hour == 24:
-                day_end = day_cursor + timedelta(days=1)
-            else:
-                day_end = day_cursor.replace(
-                    hour=self.wake_end_hour,
-                    minute=0,
-                    second=0,
-                    microsecond=0,
-                )
-
-            window_start = max(day_start, start_at)
-            window_end = min(day_end, end_at)
-            if window_end > window_start:
-                windows.append((window_start, window_end))
-
-            day_cursor += timedelta(days=1)
-
-        return windows
 
     def _events_overlap_minutes(
         self,
@@ -283,7 +250,6 @@ class MLScoringService:
                     )
 
         self._model.fit(bootstrap_features, bootstrap_targets)
-        self._is_fitted = True
 
     @staticmethod
     def _initial_target(
