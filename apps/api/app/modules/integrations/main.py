@@ -2,12 +2,12 @@ import time
 import signal
 import sys
 import threading
-from apps.api.app.modules.integrations.integration.cache_storage import SQLiteCacheStorage
-from apps.api.app.modules.integrations.integration.conflict_resolver import ConflictResolver
-from apps.api.app.modules.integrations.integration.sync_scheduler import SyncScheduler
-from apps.api.app.modules.integrations.integration.retry_queue import RetryQueue
-from apps.api.app.modules.integrations.integration.adapters.iis_adapter import IisAdapter
-from apps.api.app.modules.integrations.integration.api import start_api_server
+from app.modules.integrations.integration.cache_storage import SQLiteCacheStorage
+from app.modules.integrations.integration.conflict_resolver import ConflictResolver
+from app.modules.integrations.integration.sync_scheduler import SyncScheduler
+from app.modules.integrations.integration.retry_queue import RetryQueue
+from app.modules.integrations.integration.adapters.iis_adapter import IisAdapter
+from app.modules.integrations.integration.api import start_api_server
 
 
 def main():

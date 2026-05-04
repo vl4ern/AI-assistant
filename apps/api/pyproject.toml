@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "ai-assistant-api"
 version = "0.1.0"
 description = "Backend API for AI assistant course project"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
   "fastapi>=0.116.0,<1.0.0",
   "uvicorn[standard]>=0.35.0,<1.0.0",

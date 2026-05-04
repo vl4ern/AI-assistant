@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import List, Optional
-from apps.api.app.modules.integrations.models.task import Task
+from app.modules.integrations.models.task import Task
 
 
 class IServiceAdapter(ABC):

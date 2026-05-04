@@ -2,8 +2,8 @@ import sqlite3
 import json
 from typing import Optional, List
 from datetime import datetime
-from apps.api.app.modules.integrations.models.task import Task, SourceType, TaskStatus
-from apps.api.app.modules.integrations.integration.interfaces import ICacheStorage
+from app.modules.integrations.models.task import Task, SourceType, TaskStatus
+from app.modules.integrations.integration.interfaces import ICacheStorage
 
 
 class SQLiteCacheStorage(ICacheStorage):

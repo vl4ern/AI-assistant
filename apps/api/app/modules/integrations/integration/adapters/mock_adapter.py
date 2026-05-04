@@ -1,8 +1,8 @@
 import uuid
 from datetime import datetime, timedelta
 from typing import List, Optional
-from apps.api.app.modules.integrations.models.task import Task, SourceType, TaskStatus
-from apps.api.app.modules.integrations.integration.interfaces import IServiceAdapter
+from app.modules.integrations.models.task import Task, SourceType, TaskStatus
+from app.modules.integrations.integration.interfaces import IServiceAdapter
 
 
 class MockAdapter(IServiceAdapter):
