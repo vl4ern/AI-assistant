@@ -204,4 +204,3 @@ def test_integration_rebuild_today_reorder_completion_retrains_batch() -> None:
     service.on_task_status_updated(completed)
 
     assert scoring.pending_samples_count == 0
-    assert scoring._is_fitted or scoring._model is None

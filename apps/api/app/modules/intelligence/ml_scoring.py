@@ -12,6 +12,7 @@ from sklearn.linear_model import SGDRegressor
 
 @dataclass
 class TrainingSample:
+    """Один обучающий пример для дообучения модели."""
     features: list[float]
     target: float
     source: str
@@ -20,12 +21,16 @@ class TrainingSample:
 
 class MLScoringService:
     """
-    Сервис скоринга задач на базе ML-регрессии.
+    Сервис скоринга задач на основе линейной регрессии (SGDRegressor).
 
-    Важно:
-    - Модель используется всегда (даже "с нуля"), потому что мы делаем
-      стартовую калибровку на синтетических данных.
-    - Далее модель дообучается на реальных действиях пользователя.
+    Модель сразу готова к работе благодаря стартовой калибровке на синтетических данных,
+    сгенерированных по эвристической формуле. В процессе эксплуатации модель дообучается
+    на реальных действиях пользователя (перемещение задач в списке, завершение задач).
+
+    Основные методы:
+    - build_score_map() – формирует словарь {task_id: score} с учётом зависимостей.
+    - record_reorder_feedback() / record_completed_feedback() – накапливают данные для
+      онлайн-обучения (partial_fit).
     """
 
     def __init__(
@@ -36,6 +41,16 @@ class MLScoringService:
         retrain_batch_size: int = 20,
         overdue_bonus: float = 10.0,
     ) -> None:
+        """
+        Инициализирует сервис.
+
+        Параметры:
+            wake_start_hour: час начала бодрствования (для расчёта признака свободного времени).
+            wake_end_hour: час окончания бодрствования (24 – если до полуночи).
+            horizon_days: горизонт планирования в днях (для задач без дедлайна).
+            retrain_batch_size: размер пакета, при котором выполняется частичное обучение.
+            overdue_bonus: бонус к скору просроченной задачи при записи completed-фидбека.
+        """
         self.wake_start_hour = wake_start_hour
         self.wake_end_hour = wake_end_hour
         self.horizon_days = horizon_days
@@ -57,6 +72,7 @@ class MLScoringService:
 
     @property
     def pending_samples_count(self) -> int:
+        """Возвращает количество накопленных (но ещё не использованных) обучающих примеров."""
         return len(self._pending_samples)
 
     def build_score_map(
@@ -65,6 +81,14 @@ class MLScoringService:
         events: list[Event],
         now: datetime,
     ) -> dict[str, float]:
+        """
+        Вычисляет скоры для всех задач.
+
+        Для каждой задачи вычисляется индивидуальный скор через модель, затем применяются
+        правила зависимостей (блокирующие задачи повышают свой приоритет).
+
+        Возвращает словарь {task_id: score}. Результат также сохраняется в last_scores.
+        """
         current = self._to_utc(now)
         score_map = {
             task.id: self.score_single_task(task=task, events=events, now=current)
@@ -75,7 +99,11 @@ class MLScoringService:
         return score_map
 
     def score_single_task(self, task: Task, events: list[Event], now: datetime) -> float:
-        # Всегда считаем через ML-модель.
+        """
+        Возвращает скор одной задачи, предсказанный ML-моделью.
+
+        Признаки: [свободные минуты до дедлайна, приоритет, оценка времени].
+        """
         features = self._task_features(task=task, events=events, now=now)
         
         return float(self._model.predict([features])[0])
@@ -87,6 +115,11 @@ class MLScoringService:
         now: datetime,
         target_score: float,
     ) -> bool:
+        """
+        Регистрирует обучающий пример на основе ручного переупорядочивания задачи.
+
+        Возвращает True, если был выполнен partial_fit (накоплен полный пакет).
+        """
         return self._record_sample(
             task=task,
             events=events,
@@ -102,6 +135,12 @@ class MLScoringService:
         now: datetime,
         base_score: float,
     ) -> bool:
+        """
+        Регистрирует обучающий пример по факту завершения задачи.
+
+        Если задача просрочена, к целевому скору добавляется overdue_bonus.
+        Возвращает True, если был выполнен partial_fit.
+        """
         target = base_score
         deadline = task.deadline
         if deadline and self._to_utc(now) > self._to_utc(deadline):
@@ -123,6 +162,11 @@ class MLScoringService:
         target_score: float,
         source: str,
     ) -> bool:
+        """
+        Добавляет TrainingSample в очередь ожидания и при необходимости запускает partial_fit.
+
+        Возвращает True, если модель была дообучена (размер очереди достиг retrain_batch_size).
+        """
         features = self._task_features(task=task, events=events, now=now)
         self._pending_samples.append(
             TrainingSample(
@@ -139,23 +183,26 @@ class MLScoringService:
         features_batch = [sample.features for sample in self._pending_samples]
         targets_batch = [sample.target for sample in self._pending_samples]
 
-        # Дообучаем модель пачкой накопленных пользовательских примеров.
         self._model.partial_fit(features_batch, targets_batch)
 
         self._pending_samples.clear()
         return True
 
     def _task_features(self, task: Task, events: list[Event], now: datetime) -> list[float]:
-        # Набор признаков по ТЗ:
-        # 1) свободные минуты до дедлайна,
-        # 2) пользовательский приоритет,
-        # 3) оценка времени задачи.
+        """
+        Формирует вектор признаков для задачи:
+        [free_minutes_to_deadline, user_priority, estimated_minutes].
+        """
         free_minutes = self._time_to_deadline_free_minutes(task=task, events=events, now=now)
         user_priority = float(task.priority)
         estimate_minutes = float(task.estimated_minutes)
         return [free_minutes, user_priority, estimate_minutes]
 
     def _time_to_deadline_free_minutes(self, task: Task, events: list[Event], now: datetime) -> float:
+        """
+        Вычисляет количество свободных минут (с учётом событий) в окнах бодрствования
+        от текущего момента до дедлайна задачи. Если дедлайн отсутствует, используется horizon_days.
+        """
         current = self._to_utc(now)
         deadline = (
             self._to_utc(task.deadline)
@@ -178,6 +225,11 @@ class MLScoringService:
         windows: list[tuple[datetime, datetime]],
         events: list[Event],
     ) -> float:
+        """
+        Суммирует минуты пересечения переданных окон с заданными событиями.
+
+        Используется для вычитания занятого времени из свободного.
+        """
         busy = 0.0
         normalized_events = [
             (self._to_utc(event.start_at), self._to_utc(event.end_at))
@@ -195,6 +247,13 @@ class MLScoringService:
         return busy
 
     def _apply_dependency_rules(self, tasks: list[Task], score_map: dict[str, float]) -> None:
+        """
+        Корректирует скоры с учётом зависимостей между задачами.
+
+        Логика:
+        - Скор задачи с зависимостями становится средним между её собственным скором и скорами блокирующих задач.
+        - Блокирующие задачи получают скор не ниже среднего + 1, чтобы они выполнялись раньше.
+        """
         task_by_id = {task.id: task for task in tasks}
         base_scores = score_map.copy()
 
@@ -207,28 +266,32 @@ class MLScoringService:
             if not blockers or task.id not in base_scores:
                 continue
 
-            # Правило зависимостей:
-            # score(T) = mean(score(T), score(B1), score(B2), ...)
             dependent_score = mean(
                 [base_scores[task.id], *[base_scores[item.id] for item in blockers]]
             )
             score_map[task.id] = dependent_score
 
-            # Для блокирующих задач повышаем приоритет: score(Bi) = score(T) + 1.
             blocker_target = dependent_score + 1.0
             for blocker in blockers:
                 score_map[blocker.id] = max(score_map[blocker.id], blocker_target)
 
     @staticmethod
     def _to_utc(value: datetime) -> datetime:
+        """
+        Приводит datetime к UTC.
+
+        Если временная зона отсутствует, считает, что значение уже в UTC.
+        """
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
 
     def _bootstrap_model(self) -> None:
         """
-        Стартовая калибровка:
-        обучаем модель на синтетике, чтобы ML работал сразу после запуска.
+        Начальное обучение модели на синтетическом датасете.
+
+        Генерирует 216 примеров (комбинации free_minutes, priority, estimate) и вычисляет
+        целевой скор по формуле _initial_target. Затем выполняет fit модели.
         """
         bootstrap_features: list[list[float]] = []
         bootstrap_targets: list[float] = []

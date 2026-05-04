@@ -16,18 +16,39 @@ from app.modules.knowledge.repository import KnowledgeRepository
 
 
 class SchedulerService:
+    """
+    Оркестратор интеллектуального модуля.
+
+    Связывает репозиторий, планировщик и сервис скоринга.
+    Предоставляет методы для:
+    - перестроения расписания (rebuild)
+    - получения представления "Сегодня" (today)
+    - обработки обратной связи от пользователя (record_reorder_feedback)
+    - реакции на изменение статуса задачи (on_task_status_updated)
+    """
     def __init__(
         self,
         repository: KnowledgeRepository,
         scheduler: GreedyScheduler,
         scoring_service: MLScoringService,
     ) -> None:
+        """Сохраняет ссылки на репозиторий, планировщик и сервис скоринга."""
         self.repository = repository
         self.scheduler = scheduler
         self.scoring_service = scoring_service
         self._completed_markers: dict[str, datetime] = {}
 
     def rebuild(self) -> SchedulePlan:
+        """
+        Полностью перестраивает расписание.
+
+        1. Сбрасывает scheduled_start/end у всех подвижных задач.
+        2. Вычисляет скоринговую карту (MLScoringService).
+        3. Вызывает планировщик.
+        4. Сохраняет назначенные интервалы в репозитории.
+        5. Снимает флаг "расписание изменено" (schedule_dirty).
+        6. Возвращает объект SchedulePlan.
+        """
         now = datetime.now(timezone.utc)
         tasks = self.repository.list_tasks()
         events = self.repository.list_events()
@@ -51,6 +72,14 @@ class SchedulerService:
         return plan
 
     def today(self) -> TodayView:
+        """
+        Формирует представление "Сегодня".
+
+        Выбирает задачи, запланированные на текущий день, сортирует по времени начала,
+        определяет prime-задачу (самый ранний слот) и проверяет флаг schedule_dirty.
+
+        Возвращает объект TodayView.
+        """
         current = datetime.now(timezone.utc)
         date_value = current.date().isoformat()
 
@@ -71,6 +100,15 @@ class SchedulerService:
         )
 
     def record_reorder_feedback(self, payload: ReorderFeedbackRequest) -> ReorderFeedbackResult:
+        """
+        Обрабатывает ручное перемещение задачи пользователем.
+
+        Вычисляет целевой скор как среднее скоринг-баллов соседних задач,
+        или сохраняет текущий, если соседей нет.
+
+        Затем передаёт пример в MLScoringService для дообучения.
+        Возвращает ReorderFeedbackResult с информацией о состоянии обучения.
+        """
         now = payload.moved_at or datetime.now(timezone.utc)
 
         tasks = self.repository.list_tasks()
@@ -116,6 +154,12 @@ class SchedulerService:
         )
 
     def on_task_status_updated(self, task: Task) -> None:
+        """
+        Реагирует на изменение статуса задачи.
+
+        Если задача стала completed, записывает completed-фидбек в MLScoringService.
+        Использует маркер updated_at, чтобы избежать повторной обработки одного и того же события.
+        """
         if task.status != "completed":
             return
 
