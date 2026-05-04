@@ -8,7 +8,7 @@ from app.modules.knowledge.models import Event, Task
 from app.modules.intelligence.utils.time_utils import build_working_windows
 
 from sklearn.linear_model import SGDRegressor
-
+from sklearn.preprocessing import StandardScaler
 
 @dataclass
 class TrainingSample:
@@ -56,6 +56,7 @@ class MLScoringService:
         self.horizon_days = horizon_days
         self.retrain_batch_size = retrain_batch_size
         self.overdue_bonus = overdue_bonus
+        self._scaler = StandardScaler()
 
         self._model = SGDRegressor(
             loss="squared_error",
@@ -105,7 +106,6 @@ class MLScoringService:
         Признаки: [свободные минуты до дедлайна, приоритет, оценка времени].
         """
         features = self._task_features(task=task, events=events, now=now)
-        
         return float(self._model.predict([features])[0])
 
     def record_reorder_feedback(
@@ -196,7 +196,8 @@ class MLScoringService:
         free_minutes = self._time_to_deadline_free_minutes(task=task, events=events, now=now)
         user_priority = float(task.priority)
         estimate_minutes = float(task.estimated_minutes)
-        return [free_minutes, user_priority, estimate_minutes]
+        raw = [[free_minutes, user_priority, estimate_minutes]]
+        return list(self._scaler.transform(raw)[0])
 
     def _time_to_deadline_free_minutes(self, task: Task, events: list[Event], now: datetime) -> float:
         """
@@ -290,15 +291,15 @@ class MLScoringService:
         """
         Начальное обучение модели на синтетическом датасете.
 
-        Генерирует 216 примеров (комбинации free_minutes, priority, estimate) и вычисляет
+        Генерирует x примеров (комбинации free_minutes, priority, estimate) и вычисляет
         целевой скор по формуле _initial_target. Затем выполняет fit модели.
         """
         bootstrap_features: list[list[float]] = []
         bootstrap_targets: list[float] = []
 
-        free_minutes_values = [60, 240, 720, 1440, 2880, 7200, 14400, 28800, 43200]
+        free_minutes_values = [30, 60, 180, 240, 720, 1440, 2880, 7200, 10000, 14400, 20000, 28800, 35000, 43200]
         priorities = [1, 2, 3, 4]
-        estimates = [30, 60, 90, 120, 180, 240]
+        estimates = [30, 60, 90, 120, 150, 180, 210, 240, 270, 300]
 
         for free_minutes in free_minutes_values:
             for priority in priorities:
@@ -312,7 +313,12 @@ class MLScoringService:
                         )
                     )
 
-        self._model.fit(bootstrap_features, bootstrap_targets)
+        # Масштабируем признаки
+        self._scaler.fit(bootstrap_features)
+        X_scaled = self._scaler.transform(bootstrap_features)
+
+        self._model.fit(X_scaled, bootstrap_targets)
+        
 
     @staticmethod
     def _initial_target(
@@ -326,5 +332,5 @@ class MLScoringService:
         - чем "важнее" задача для пользователя (priority=1), тем выше score;
         - более длинные задачи немного повышаем, чтобы не откладывались бесконечно.
         """
-        raw = 220.0 - (0.006 * free_minutes) - (18.0 * priority) + (0.05 * estimated_minutes)
-        return max(0.0, min(200.0, raw))
+        raw = 1018.0 - (0.006 * free_minutes) - (18.0 * priority) + (0.05 * estimated_minutes)
+        return raw

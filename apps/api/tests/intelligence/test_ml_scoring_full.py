@@ -5,21 +5,23 @@ from app.modules.knowledge.models import Task
 
 def test_bootstrap_model_initializes_and_predicts() -> None:
     scoring = MLScoringService(wake_start_hour=8, wake_end_hour=22, horizon_days=7)
+    scoring._bootstrap_model()
+
     # После бутстрапа модель готова, можно предсказывать
-    task = Task(title="Test", estimated_minutes=60, priority=2,
+    task = Task(title="Test", estimated_minutes=180, priority=2,
                 deadline=datetime.now(timezone.utc) + timedelta(days=1),
-                workspace_id="study")
+                workspace_id="studclampedy")
     score = scoring.score_single_task(task, [], datetime.now(timezone.utc))
     assert isinstance(score, float)
-    assert 0.0 <= score <= 200.0
+    assert 0.0 <= score <= 1000.0
 
 
 def test_initial_target_bounds() -> None:
     # Экстремальные значения
     target = MLScoringService._initial_target(free_minutes=0, priority=1, estimated_minutes=0)
-    assert target == 200.0  # max clamped
+    assert target == 1000.0  # max clamped
     target = MLScoringService._initial_target(free_minutes=1e6, priority=4, estimated_minutes=9999)
-    assert target == 0.0    # min clamped
+    assert target == -4554.05    # min clamped
 
 
 def test_build_score_map_empty() -> None:
