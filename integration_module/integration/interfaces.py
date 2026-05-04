@@ -50,5 +50,9 @@ class ICacheStorage(ABC):
         pass
 
     @abstractmethod
+    def get_all_tasks(self) -> List[Task]:
+        pass
+
+    @abstractmethod
     def get_version(self, task_id: str) -> int:
         pass
