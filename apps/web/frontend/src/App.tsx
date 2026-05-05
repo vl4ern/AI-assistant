@@ -1,804 +1,1004 @@
-import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
+import { apiRequest } from './api/client';
 import { createTask as createTaskApi, getTasks, updateTaskStatus } from './api/tasks';
-import type { ApiTask, ApiTaskCreate } from './types/api';
-import { KnowledgeBasePanel } from './components/KnowledgeBasePanel';
+import type { ApiTask, ApiTaskCreate, ApiTaskStatus } from './types/api';
 
-type Page = 'dashboard' | 'tasks' | 'calendar' | 'projects' | 'analytics' | 'settings';
-type TaskPriority = 'High' | 'Medium' | 'Low';
-type ImportMode = 'smart' | 'classes' | 'exams';
+type Page = 'dashboard' | 'tasks' | 'history' | 'calendar' | 'docs';
+type ActiveTaskFilter = 'all' | 'high' | 'blocked' | 'without_deadline';
+type HistoryFilter = 'all' | 'completed' | 'cancelled';
 
-type Task = {
+type ApiEvent = {
   id: string;
   title: string;
-  course: string;
-  deadline: string;
-  priority: TaskPriority;
-  customTag: string;
-  completed: boolean;
+  start_at: string;
+  end_at: string;
+  source: string;
 };
 
-type ScheduleItemType = 'lecture' | 'lab' | 'practice' | 'exam';
-
-type ScheduleItem = {
-  time: string;
+type ApiEventCreate = {
   title: string;
-  room: string;
-  teacher?: string;
-  type: ScheduleItemType;
+  start_at: string;
+  end_at: string;
+  source: string;
 };
 
-type DayDetails = {
-  date: Date;
-  items: ScheduleItem[];
-  cycleWeek: number | null;
-  inSemester: boolean;
+type TaskForm = {
+  title: string;
+  description: string;
+  estimatedMinutes: string;
+  priority: string;
+  deadlineDate: string;
+  deadlineTime: string;
+  workspaceId: string;
+  projectId: string;
+  dependsOnTaskId: string;
 };
+
+type EventForm = {
+  title: string;
+  startDate: string;
+  startTime: string;
+  endDate: string;
+  endTime: string;
+  source: string;
+};
+
+const initialTaskForm: TaskForm = {
+  title: '',
+  description: '',
+  estimatedMinutes: '60',
+  priority: '2',
+  deadlineDate: '',
+  deadlineTime: '',
+  workspaceId: 'study',
+  projectId: '',
+  dependsOnTaskId: '',
+};
+
+const initialEventForm: EventForm = {
+  title: '',
+  startDate: '',
+  startTime: '',
+  endDate: '',
+  endTime: '',
+  source: 'manual',
+};
+
+const pinnedStorageKey = 'ai-assistant-pinned-task-ids';
 
 const navItems: Array<{ id: Page; label: string }> = [
-  { id: 'dashboard', label: 'Dashboard' },
-  { id: 'tasks', label: 'Tasks' },
-  { id: 'calendar', label: 'Calendar' },
-  { id: 'projects', label: 'Projects' },
-  { id: 'analytics', label: 'Analytics' },
-  { id: 'settings', label: 'Settings' },
+  { id: 'dashboard', label: 'База знаний' },
+  { id: 'tasks', label: 'Задачи' },
+  { id: 'history', label: 'История' },
+  { id: 'calendar', label: 'События' },
+  { id: 'docs', label: 'Документация' },
 ];
 
-const initialTasks: Task[] = [
-  {
-    id: 'demo-1',
-    title: 'Finish database report',
-    course: 'Databases',
-    deadline: 'Today, 18:00',
-    priority: 'High',
-    customTag: 'Report',
-    completed: false,
-  },
-  {
-    id: 'demo-2',
-    title: 'Read AI lecture notes',
-    course: 'Artificial Intelligence',
-    deadline: 'Tomorrow, 11:00',
-    priority: 'Medium',
-    customTag: 'Lecture',
-    completed: false,
-  },
-  {
-    id: 'demo-3',
-    title: 'Prepare web project structure',
-    course: 'Web Development',
-    deadline: 'Friday, 14:00',
-    priority: 'High',
-    customTag: 'Project',
-    completed: true,
-  },
-  {
-    id: 'demo-4',
-    title: 'Review math homework',
-    course: 'Discrete Math',
-    deadline: 'Saturday, 09:00',
-    priority: 'Low',
-    customTag: 'Homework',
-    completed: false,
-  },
-];
-
-const semesterStartDate = new Date(2026, 1, 9);
-const semesterEndDate = new Date(2026, 5, 30);
-
-const semesterMonths = [
-  { year: 2026, month: 1, label: 'February 2026' },
-  { year: 2026, month: 2, label: 'March 2026' },
-  { year: 2026, month: 3, label: 'April 2026' },
-  { year: 2026, month: 4, label: 'May 2026' },
-  { year: 2026, month: 5, label: 'June 2026' },
-];
-
-const weekdayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
-const schedulePattern: Record<number, Record<number, ScheduleItem[]>> = {
-  1: {
-    1: [
-      { time: '08:30', title: 'ППОИС (ЛК)', room: '214-4', teacher: 'Садовский М. Е.', type: 'lecture' },
-      { time: '10:05', title: 'ВОВСНВМВ (ЛК)', room: '214-4', teacher: 'Николаева Л. В.', type: 'lecture' },
-      { time: '12:00', title: 'ФизК (ПЗ)', room: '—', type: 'practice' },
-      { time: '13:35', title: 'Инф. час (ПЗ)', room: '612а-5', teacher: 'Пакутник Д. В.', type: 'practice' },
-    ],
-    2: [
-      { time: '12:00', title: 'СПЭ (ЛК)', room: '218-4', teacher: 'Макеева Е. Н.', type: 'lecture' },
-      { time: '13:35', title: 'Философия (ЛК)', room: '218-4', teacher: 'Бархатков А. И.', type: 'lecture' },
-      { time: '15:30', title: 'МППиУ (ПЗ)', room: '420-4', teacher: 'Слюсарь Т. Л.', type: 'practice' },
-      { time: '17:05', title: 'ЛОИС (ЛР)', room: '607-5', teacher: 'Ивашенко В. П.', type: 'lab' },
-    ],
-    3: [
-      { time: '12:00', title: 'ИГИСиТ / МаОсИС (ЛР)', room: '607-5 / 612-5', type: 'lab' },
-      { time: '15:30', title: 'ОУИС (ЛК)', room: '209-3', teacher: 'Смирнова Н. А.', type: 'lecture' },
-    ],
-    4: [
-      { time: '08:30', title: 'ИГИСиТ (ЛК)', room: '214-4', teacher: 'Самодумкин С. А.', type: 'lecture' },
-      { time: '10:05', title: 'МаОсИС (ЛК)', room: '214-4', teacher: 'Шункевич Д. В.', type: 'lecture' },
-      { time: '12:00', title: 'ВОВСНВМВ (ПЗ)', room: '427-4', teacher: 'Галицкая Е. М.', type: 'practice' },
-      { time: '13:35', title: 'ЛОИС (ЛР)', room: '607-5', teacher: 'Ивашенко В. П.', type: 'lab' },
-    ],
-    5: [
-      { time: '12:00', title: 'ЛОИС (ЛК)', room: '218-4', teacher: 'Ивашенко В. П.', type: 'lecture' },
-      { time: '13:35', title: 'АОИС (ЛК)', room: '218-4', teacher: 'Захаров В. В.', type: 'lecture' },
-      { time: '15:30', title: 'ППОИС (ЛР)', room: '612-5', teacher: 'Гуменный Н. А.', type: 'lab' },
-      { time: '17:05', title: 'СПЭ (ПЗ)', room: '419-4', teacher: 'Пшонко Е. С.', type: 'practice' },
-    ],
-    6: [
-      { time: '08:30', title: 'АОИС (ЛР)', room: '607-5', teacher: 'Жук А. А.', type: 'lab' },
-      { time: '12:00', title: 'АОИС (ЛР)', room: '607-5', teacher: 'Жук А. А.', type: 'lab' },
-    ],
-  },
-  2: {
-    1: [
-      { time: '08:30', title: 'ППОИС (ЛК)', room: '214-4', teacher: 'Садовский М. Е.', type: 'lecture' },
-      { time: '10:05', title: 'МППиУ (ЛК)', room: '214-4', teacher: 'Шкор О. Н.', type: 'lecture' },
-      { time: '12:00', title: 'ФизК (ПЗ)', room: '—', type: 'practice' },
-    ],
-    2: [
-      { time: '08:30', title: 'МаОсИС / ППОИС (ЛР)', room: '612а-5 / 607-5', type: 'lab' },
-      { time: '10:05', title: 'ППОИС / МаОсИС (ЛР)', room: '607-5 / 612а-5', type: 'lab' },
-      { time: '13:35', title: 'Философия (ЛК)', room: '218-4', teacher: 'Бархатков А. И.', type: 'lecture' },
-      { time: '15:30', title: 'К.Ч. (ПЗ)', room: '612-5', teacher: 'Пакутник Д. В.', type: 'practice' },
-    ],
-    3: [{ time: '13:35', title: 'ИГИСиТ (ЛР)', room: '607-5', teacher: 'Самодумкин С. А.', type: 'lab' }],
-    4: [
-      { time: '08:30', title: 'ИГИСиТ (ЛК)', room: '214-4', teacher: 'Самодумкин С. А.', type: 'lecture' },
-      { time: '10:05', title: 'МаОсИС (ЛК)', room: '214-4', teacher: 'Шункевич Д. В.', type: 'lecture' },
-      { time: '12:00', title: 'МаОсИС (ЛР)', room: '612а-5', teacher: 'Зотов Н. В.', type: 'lab' },
-      { time: '13:35', title: 'ЛОИС (ЛР)', room: '607-5', teacher: 'Ивашенко В. П.', type: 'lab' },
-    ],
-    5: [
-      { time: '10:05', title: 'Философия (ПЗ)', room: '414-4', teacher: 'Шкундич А. О.', type: 'practice' },
-      { time: '12:00', title: 'ЛОИС (ЛК)', room: '218-4', teacher: 'Ивашенко В. П.', type: 'lecture' },
-      { time: '13:35', title: 'АОИС (ЛК)', room: '218-4', teacher: 'Захаров В. В.', type: 'lecture' },
-      { time: '15:30', title: 'СПЭ (ПЗ)', room: '417-4', teacher: 'Пшонко Е. С.', type: 'practice' },
-    ],
-    6: [],
-  },
-  3: {
-    1: [
-      { time: '09:55', title: 'ППОИС (ЛК)', room: '214-4', teacher: 'Садовский М. Е.', type: 'lecture' },
-      { time: '11:30', title: 'ВОВСНВМВ (ЛК)', room: '214-4', teacher: 'Николаева Л. В.', type: 'lecture' },
-      { time: '13:25', title: 'ФизК (ПЗ)', room: '—', type: 'practice' },
-      { time: '15:00', title: 'Инф. час (ПЗ)', room: '612а-5', teacher: 'Пакутник Д. В.', type: 'practice' },
-    ],
-    2: [
-      { time: '13:25', title: 'СПЭ (ЛК)', room: '218-4', teacher: 'Макеева Е. Н.', type: 'lecture' },
-      { time: '15:00', title: 'Философия (ЛК)', room: '218-4', teacher: 'Бархатков А. И.', type: 'lecture' },
-      { time: '16:55', title: 'МППиУ (ПЗ)', room: '420-4', teacher: 'Слюсарь Т. Л.', type: 'practice' },
-    ],
-    3: [
-      { time: '13:25', title: 'МаОсИС / ИГИСиТ (ЛР)', room: '612-5 / 607-5', type: 'lab' },
-      { time: '16:55', title: 'ОУИС (ЛК)', room: '209-3', teacher: 'Смирнова Н. А.', type: 'lecture' },
-    ],
-    4: [
-      { time: '09:55', title: 'ИГИСиТ (ЛК)', room: '214-4', teacher: 'Самодумкин С. А.', type: 'lecture' },
-      { time: '11:30', title: 'МаОсИС (ЛК)', room: '214-4', teacher: 'Шункевич Д. В.', type: 'lecture' },
-      { time: '13:25', title: 'ВОВСНВМВ (ПЗ)', room: '427-4', teacher: 'Галицкая Е. М.', type: 'practice' },
-    ],
-    5: [
-      { time: '12:00', title: 'ЛОИС (ЛК)', room: '218-4', teacher: 'Ивашенко В. П.', type: 'lecture' },
-      { time: '13:25', title: 'АОИС (ЛК)', room: '218-4', teacher: 'Захаров В. В.', type: 'lecture' },
-      { time: '16:55', title: 'ППОИС (ЛР)', room: '612-5', teacher: 'Гуменный Н. А.', type: 'lab' },
-    ],
-    6: [
-      { time: '09:55', title: 'АОИС (ЛР)', room: '607-5', teacher: 'Жук А. А.', type: 'lab' },
-      { time: '13:25', title: 'АОИС (ЛР)', room: '607-5', teacher: 'Жук А. А.', type: 'lab' },
-    ],
-  },
-  4: {
-    1: [
-      { time: '09:55', title: 'ППОИС (ЛК)', room: '214-4', teacher: 'Садовский М. Е.', type: 'lecture' },
-      { time: '11:30', title: 'МППиУ (ЛК)', room: '214-4', teacher: 'Шкор О. Н.', type: 'lecture' },
-      { time: '15:00', title: 'Инф. час (ПЗ)', room: '612а-5', teacher: 'Пакутник Д. В.', type: 'practice' },
-    ],
-    2: [
-      { time: '09:55', title: 'ППОИС / МаОсИС (ЛР)', room: '607-5 / 612а-5', type: 'lab' },
-      { time: '11:30', title: 'ППОИС / МаОсИС (ЛР)', room: '607-5 / 612а-5', type: 'lab' },
-      { time: '15:00', title: 'Философия (ЛК)', room: '218-4', teacher: 'Бархатков А. И.', type: 'lecture' },
-      { time: '16:55', title: 'К.Ч. (ПЗ)', room: '612-5', teacher: 'Пакутник Д. В.', type: 'practice' },
-    ],
-    3: [
-      { time: '15:00', title: 'ИГИСиТ (ЛР)', room: '607-5', teacher: 'Самодумкин С. А.', type: 'lab' },
-      { time: '16:55', title: 'Философия (ПЗ)', room: '301-4', teacher: 'Шкундич А. О.', type: 'practice' },
-    ],
-    4: [
-      { time: '09:55', title: 'ИГИСиТ (ЛК)', room: '214-4', teacher: 'Самодумкин С. А.', type: 'lecture' },
-      { time: '11:30', title: 'МаОсИС (ЛК)', room: '214-4', teacher: 'Шункевич Д. В.', type: 'lecture' },
-      { time: '15:00', title: 'МаОсИС (ЛР)', room: '612а-5', teacher: 'Зотов Н. В.', type: 'lab' },
-    ],
-    5: [
-      { time: '10:05', title: 'Философия (ПЗ)', room: '414-4', teacher: 'Шкундич А. О.', type: 'practice' },
-      { time: '13:25', title: 'ЛОИС (ЛК)', room: '218-4', teacher: 'Ивашенко В. П.', type: 'lecture' },
-      { time: '15:00', title: 'АОИС (ЛК)', room: '218-4', teacher: 'Захаров В. В.', type: 'lecture' },
-    ],
-    6: [],
-  },
+const statusLabels: Record<ApiTaskStatus, string> = {
+  todo: 'К выполнению',
+  in_progress: 'В работе',
+  completed: 'Выполнена',
+  cancelled: 'Удалена',
+  blocked: 'Заблокирована',
 };
 
-function toMidnight(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+const statusOptions: ApiTaskStatus[] = [
+  'todo',
+  'in_progress',
+  'blocked',
+  'completed',
+  'cancelled',
+];
+
+function getEvents(): Promise<ApiEvent[]> {
+  return apiRequest<ApiEvent[]>('/v1/events');
 }
 
-function getDayDifference(from: Date, to: Date): number {
-  const millisecondsPerDay = 24 * 60 * 60 * 1000;
-  return Math.floor((toMidnight(to).getTime() - toMidnight(from).getTime()) / millisecondsPerDay);
+function createEvent(payload: ApiEventCreate): Promise<ApiEvent> {
+  return apiRequest<ApiEvent>('/v1/events', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }
 
-function getMondayIndex(date: Date): number {
-  const raw = date.getDay();
-  return raw === 0 ? 7 : raw;
-}
-
-function isDateInSemester(date: Date): boolean {
-  const current = toMidnight(date).getTime();
-  return current >= toMidnight(semesterStartDate).getTime() && current <= toMidnight(semesterEndDate).getTime();
-}
-
-function getCycleWeek(date: Date): number | null {
-  if (!isDateInSemester(date)) return null;
-  const diff = getDayDifference(semesterStartDate, date);
-  const weekIndex = Math.floor(diff / 7);
-  return (weekIndex % 4) + 1;
-}
-
-function getScheduleForDate(date: Date): ScheduleItem[] {
-  const cycleWeek = getCycleWeek(date);
-  const weekday = getMondayIndex(date);
-  if (!cycleWeek || weekday === 7) return [];
-  return schedulePattern[cycleWeek]?.[weekday] ?? [];
-}
-
-function getMonthGrid(year: number, month: number): Array<Date | null> {
-  const firstDay = new Date(year, month, 1);
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const firstWeekdayIndex = getMondayIndex(firstDay);
-
-  const cells: Array<Date | null> = [];
-  for (let i = 1; i < firstWeekdayIndex; i += 1) cells.push(null);
-  for (let day = 1; day <= daysInMonth; day += 1) cells.push(new Date(year, month, day));
-  while (cells.length % 7 !== 0) cells.push(null);
-  return cells;
-}
-
-function getDaySummary(date: Date): { line1: string; line2: string } {
-  const inSemester = isDateInSemester(date);
-  const weekday = getMondayIndex(date);
-  const items = getScheduleForDate(date);
-
-  if (!inSemester) return { line1: 'Semester off', line2: 'No study cycle yet' };
-  if (weekday === 7) return { line1: 'Weekend', line2: 'No classes' };
-  if (items.length === 0) return { line1: 'No classes', line2: 'Free study day' };
-
-  return {
-    line1: `${items[0].time}–${items[items.length - 1].time}`,
-    line2: `${items.length} class${items.length > 1 ? 'es' : ''} • study`,
-  };
-}
-
-
-function mapApiPriorityToUiPriority(priority: number): TaskPriority {
-  if (priority <= 1) {
-    return 'High';
+function formatDateTime(value: string | null): string {
+  if (!value) {
+    return 'не указан';
   }
 
-  if (priority === 2) {
-    return 'Medium';
-  }
-
-  return 'Low';
-}
-
-function mapUiPriorityToApiPriority(priority: TaskPriority): number {
-  if (priority === 'High') {
-    return 1;
-  }
-
-  if (priority === 'Medium') {
-    return 2;
-  }
-
-  return 3;
-}
-
-function formatDeadline(deadline: string | null): string {
-  if (!deadline) {
-    return 'No deadline';
-  }
-
-  const date = new Date(deadline);
+  const date = new Date(value);
 
   if (Number.isNaN(date.getTime())) {
-    return 'Invalid deadline';
+    return 'некорректная дата';
   }
 
-  return date.toLocaleString('en-GB', {
+  return date.toLocaleString('ru-RU', {
     day: '2-digit',
     month: 'short',
+    year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
   });
 }
 
-function buildDeadlineIso(day: string, time: string): string | null {
-  if (!day || !time) {
+function buildDateTimeIso(date: string, time: string): string | null {
+  if (!date || !time) {
     return null;
   }
 
-  const date = new Date(`${day}T${time}:00`);
+  const result = new Date(`${date}T${time}:00`);
 
-  if (Number.isNaN(date.getTime())) {
+  if (Number.isNaN(result.getTime())) {
     return null;
   }
 
-  return date.toISOString();
+  return result.toISOString();
 }
 
-function mapApiTaskToUiTask(task: ApiTask): Task {
-  return {
-    id: task.id,
-    title: task.title,
-    course: task.workspace_id || 'Study',
-    deadline: formatDeadline(task.deadline),
-    priority: mapApiPriorityToUiPriority(task.priority),
-    customTag: task.project_id || 'Backend',
-    completed: task.status === 'completed',
-  };
+function getPriorityLabel(priority: number): string {
+  if (priority === 1) {
+    return 'Высокий';
+  }
+
+  if (priority === 2) {
+    return 'Средний';
+  }
+
+  if (priority === 3) {
+    return 'Низкий';
+  }
+
+  return 'Минимальный';
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return 'Неизвестная ошибка';
+}
+
+function loadPinnedTaskIds(): string[] {
+  try {
+    const rawValue = window.localStorage.getItem(pinnedStorageKey);
+
+    if (!rawValue) {
+      return [];
+    }
+
+    const parsedValue = JSON.parse(rawValue);
+
+    if (!Array.isArray(parsedValue)) {
+      return [];
+    }
+
+    return parsedValue.filter((value) => typeof value === 'string');
+  } catch {
+    return [];
+  }
+}
+
+function savePinnedTaskIds(taskIds: string[]): void {
+  window.localStorage.setItem(pinnedStorageKey, JSON.stringify(taskIds));
 }
 
 function App() {
   const [activePage, setActivePage] = useState<Page>('dashboard');
-  const [searchValue, setSearchValue] = useState('');
-  const [tasks, setTasks] = useState<Task[]>(initialTasks);
-  const [isTasksLoading, setIsTasksLoading] = useState(false);
-  const [tasksError, setTasksError] = useState('');
-  const [currentMonthIndex, setCurrentMonthIndex] = useState(0);
-  const [selectedDay, setSelectedDay] = useState<DayDetails | null>(null);
-  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-  const [selectedFileName, setSelectedFileName] = useState('No schedule file selected');
-  const [importMode, setImportMode] = useState<ImportMode>('smart');
-  const [calendarSourceLabel, setCalendarSourceLabel] = useState('Semester template');
+  const [tasks, setTasks] = useState<ApiTask[]>([]);
+  const [events, setEvents] = useState<ApiEvent[]>([]);
+  const [pinnedTaskIds, setPinnedTaskIds] = useState<string[]>(() => loadPinnedTaskIds());
+  const [activeFilter, setActiveFilter] = useState<ActiveTaskFilter>('all');
+  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all');
+  const [isLoading, setIsLoading] = useState(false);
+  const [isEventsLoading, setIsEventsLoading] = useState(false);
+  const [isCreatingTask, setIsCreatingTask] = useState(false);
+  const [isCreatingEvent, setIsCreatingEvent] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [taskForm, setTaskForm] = useState<TaskForm>(initialTaskForm);
+  const [eventForm, setEventForm] = useState<EventForm>(initialEventForm);
 
-  // Task creation modal state
-  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
-  const [newTaskTitle, setNewTaskTitle] = useState('');
-  const [newTaskCourse, setNewTaskCourse] = useState('');
-  const [newTaskDay, setNewTaskDay] = useState('');
-  const [newTaskTime, setNewTaskTime] = useState('');
-  const [newTaskPriority, setNewTaskPriority] = useState<TaskPriority>('Medium');
-  const [newTaskTag, setNewTaskTag] = useState('');
-  const [taskFormError, setTaskFormError] = useState('');
-
-  const currentMonth = semesterMonths[currentMonthIndex];
-
-  useEffect(() => {
-    async function loadTasks(): Promise<void> {
-      try {
-        setIsTasksLoading(true);
-        setTasksError('');
-
-        const apiTasks = await getTasks();
-
-        setTasks(apiTasks.map(mapApiTaskToUiTask));
-      } catch {
-        setTasksError('Failed to load tasks from backend. Check that API is running on http://localhost:8000.');
-      } finally {
-        setIsTasksLoading(false);
-      }
-    }
-
-    loadTasks();
-  }, []);
-
-
-  const monthCells = useMemo(() => getMonthGrid(currentMonth.year, currentMonth.month), [currentMonth]);
-  const activeTasksCount = useMemo(() => tasks.filter((task) => !task.completed).length, [tasks]);
-  const completedTasksCount = useMemo(() => tasks.filter((task) => task.completed).length, [tasks]);
-  const highPriorityCount = useMemo(
-    () => tasks.filter((task) => task.priority === 'High' && !task.completed).length,
+  const activeTasksList = useMemo(
+    () => tasks.filter((task) => ['todo', 'in_progress', 'blocked'].includes(task.status)),
     [tasks]
   );
 
-  const filteredTasks = useMemo(() => {
-    const normalized = searchValue.trim().toLowerCase();
-    if (!normalized) return tasks;
-    return tasks.filter((task) => {
-      return (
-        task.title.toLowerCase().includes(normalized) ||
-        task.course.toLowerCase().includes(normalized) ||
-        task.deadline.toLowerCase().includes(normalized) ||
-        task.customTag.toLowerCase().includes(normalized)
-      );
-    });
-  }, [tasks, searchValue]);
-
-  async function toggleTask(taskId: string): Promise<void> {
-    const currentTask = tasks.find((task) => task.id === taskId);
-
-    if (!currentTask) {
-      return;
+  const filteredActiveTasks = useMemo(() => {
+    if (activeFilter === 'high') {
+      return activeTasksList.filter((task) => task.priority === 1);
     }
 
-    const nextCompleted = !currentTask.completed;
-    const nextStatus = nextCompleted ? 'completed' : 'todo';
+    if (activeFilter === 'blocked') {
+      return activeTasksList.filter((task) => task.status === 'blocked');
+    }
 
-    setTasks((prevTasks) =>
-      prevTasks.map((task) =>
-        task.id === taskId ? { ...task, completed: nextCompleted } : task
-      )
-    );
+    if (activeFilter === 'without_deadline') {
+      return activeTasksList.filter((task) => task.deadline === null);
+    }
 
+    return activeTasksList;
+  }, [activeFilter, activeTasksList]);
+
+  const historyTasks = useMemo(
+    () => tasks.filter((task) => ['completed', 'cancelled'].includes(task.status)),
+    [tasks]
+  );
+
+  const filteredHistoryTasks = useMemo(() => {
+    if (historyFilter === 'completed') {
+      return historyTasks.filter((task) => task.status === 'completed');
+    }
+
+    if (historyFilter === 'cancelled') {
+      return historyTasks.filter((task) => task.status === 'cancelled');
+    }
+
+    return historyTasks;
+  }, [historyFilter, historyTasks]);
+
+  const pinnedTasks = useMemo(
+    () => filteredActiveTasks.filter((task) => pinnedTaskIds.includes(task.id)),
+    [filteredActiveTasks, pinnedTaskIds]
+  );
+
+  const regularActiveTasks = useMemo(
+    () => filteredActiveTasks.filter((task) => !pinnedTaskIds.includes(task.id)),
+    [filteredActiveTasks, pinnedTaskIds]
+  );
+
+  const totalTasks = tasks.length;
+  const activeTasks = activeTasksList.length;
+  const schedulableTasks = useMemo(
+    () => tasks.filter((task) => ['todo', 'in_progress'].includes(task.status)).length,
+    [tasks]
+  );
+  const completedTasks = useMemo(
+    () => tasks.filter((task) => task.status === 'completed').length,
+    [tasks]
+  );
+  const cancelledTasks = useMemo(
+    () => tasks.filter((task) => task.status === 'cancelled').length,
+    [tasks]
+  );
+  const highPriorityTasks = useMemo(
+    () =>
+      tasks.filter(
+        (task) => task.priority === 1 && task.status !== 'completed' && task.status !== 'cancelled'
+      ).length,
+    [tasks]
+  );
+  const dependenciesCount = useMemo(
+    () => tasks.reduce((count, task) => count + task.depends_on.length, 0),
+    [tasks]
+  );
+
+  async function loadTasks(): Promise<void> {
     try {
-      setTasksError('');
+      setIsLoading(true);
+      setError('');
 
-      const updatedTask = await updateTaskStatus(taskId, nextStatus);
-
-      setTasks((prevTasks) =>
-        prevTasks.map((task) =>
-          task.id === taskId ? mapApiTaskToUiTask(updatedTask) : task
-        )
-      );
-    } catch {
-      setTasksError('Failed to update task status on backend.');
-
-      setTasks((prevTasks) =>
-        prevTasks.map((task) =>
-          task.id === taskId ? { ...task, completed: currentTask.completed } : task
-        )
-      );
+      const loadedTasks = await getTasks();
+      setTasks(loadedTasks);
+    } catch (loadError) {
+      setError(`Не удалось загрузить задачи: ${getErrorMessage(loadError)}`);
+    } finally {
+      setIsLoading(false);
     }
   }
 
-  function openTaskModal(): void {
-    setIsTaskModalOpen(true);
-    setTaskFormError('');
+  async function loadEvents(): Promise<void> {
+    try {
+      setIsEventsLoading(true);
+      setError('');
+
+      const loadedEvents = await getEvents();
+      setEvents(loadedEvents);
+    } catch (loadError) {
+      setError(`Не удалось загрузить события: ${getErrorMessage(loadError)}`);
+    } finally {
+      setIsEventsLoading(false);
+    }
   }
 
-  function closeTaskModal(): void {
-    setIsTaskModalOpen(false);
-    setNewTaskTitle('');
-    setNewTaskCourse('');
-    setNewTaskDay('');
-    setNewTaskTime('');
-    setNewTaskPriority('Medium');
-    setNewTaskTag('');
-    setTaskFormError('');
+  async function loadKnowledgeBase(): Promise<void> {
+    await Promise.all([loadTasks(), loadEvents()]);
   }
 
-  async function createTask(): Promise<void> {
-    const title = newTaskTitle.trim();
-    const course = newTaskCourse.trim() || 'study';
-    const day = newTaskDay.trim();
-    const time = newTaskTime.trim();
-    const tag = newTaskTag.trim() || null;
+  useEffect(() => {
+    void loadKnowledgeBase();
+  }, []);
+
+  function updateTaskFormField(field: keyof TaskForm, value: string): void {
+    setTaskForm((previousForm) => ({
+      ...previousForm,
+      [field]: value,
+    }));
+  }
+
+  function updateEventFormField(field: keyof EventForm, value: string): void {
+    setEventForm((previousForm) => ({
+      ...previousForm,
+      [field]: value,
+    }));
+  }
+
+  function togglePinnedTask(taskId: string): void {
+    setPinnedTaskIds((currentIds) => {
+      const nextIds = currentIds.includes(taskId)
+        ? currentIds.filter((id) => id !== taskId)
+        : [...currentIds, taskId];
+
+      savePinnedTaskIds(nextIds);
+      return nextIds;
+    });
+  }
+
+  async function handleCreateTask(): Promise<void> {
+    const title = taskForm.title.trim();
 
     if (!title) {
-      setTaskFormError('Enter task title.');
+      setError('Введите название задачи.');
       return;
     }
 
-    if (!day || !time) {
-      setTaskFormError('Enter day and time.');
+    const estimatedMinutes = Number(taskForm.estimatedMinutes);
+    const priority = Number(taskForm.priority);
+
+    if (!Number.isFinite(estimatedMinutes) || estimatedMinutes < 15 || estimatedMinutes > 1440) {
+      setError('Длительность задачи должна быть от 15 до 1440 минут.');
       return;
     }
 
-    const deadline = buildDeadlineIso(day, time);
-
-    if (!deadline) {
-      setTaskFormError('Enter a valid day and time.');
+    if (!Number.isFinite(priority) || priority < 1 || priority > 4) {
+      setError('Приоритет должен быть от 1 до 4.');
       return;
     }
+
+    const deadline = buildDateTimeIso(taskForm.deadlineDate, taskForm.deadlineTime);
+    const dependsOn = taskForm.dependsOnTaskId ? [taskForm.dependsOnTaskId] : [];
 
     const payload: ApiTaskCreate = {
       title,
-      description: null,
-      estimated_minutes: 60,
-      priority: mapUiPriorityToApiPriority(newTaskPriority),
+      description: taskForm.description.trim() || null,
+      estimated_minutes: estimatedMinutes,
+      priority,
       deadline,
-      workspace_id: course,
-      project_id: tag,
+      workspace_id: taskForm.workspaceId.trim() || 'study',
+      project_id: taskForm.projectId.trim() || null,
       auto_reschedule: true,
-      depends_on: [],
+      depends_on: dependsOn,
       allow_split: false,
       min_chunk_minutes: null,
     };
 
     try {
-      setTaskFormError('');
-      setTasksError('');
+      setIsCreatingTask(true);
+      setError('');
+      setMessage('');
 
       const createdTask = await createTaskApi(payload);
 
-      setTasks((prevTasks) => [mapApiTaskToUiTask(createdTask), ...prevTasks]);
+      setTasks((previousTasks) => [createdTask, ...previousTasks]);
+      setTaskForm(initialTaskForm);
+      setMessage('Задача добавлена в базу знаний.');
       setActivePage('tasks');
-      closeTaskModal();
-    } catch {
-      setTaskFormError('Failed to create task on backend.');
+    } catch (createError) {
+      setError(`Не удалось создать задачу: ${getErrorMessage(createError)}`);
+    } finally {
+      setIsCreatingTask(false);
     }
   }
 
-  function openDayDetails(date: Date): void {
-    setSelectedDay({
-      date,
-      items: getScheduleForDate(date),
-      cycleWeek: getCycleWeek(date),
-      inSemester: isDateInSemester(date),
-    });
-  }
+  async function handleCreateEvent(): Promise<void> {
+    const title = eventForm.title.trim();
 
-  function closeDayDetails(): void {
-    setSelectedDay(null);
-  }
-
-  function handleFileChange(event: ChangeEvent<HTMLInputElement>): void {
-    const file = event.target.files?.[0] ?? null;
-    if (!file) {
-      setSelectedFileName('No schedule file selected');
+    if (!title) {
+      setError('Введите название события.');
       return;
     }
-    setSelectedFileName(file.name);
+
+    const startAt = buildDateTimeIso(eventForm.startDate, eventForm.startTime);
+    const endAt = buildDateTimeIso(eventForm.endDate, eventForm.endTime);
+
+    if (!startAt || !endAt) {
+      setError('Введите корректное время начала и окончания события.');
+      return;
+    }
+
+    const payload: ApiEventCreate = {
+      title,
+      start_at: startAt,
+      end_at: endAt,
+      source: eventForm.source.trim() || 'manual',
+    };
+
+    try {
+      setIsCreatingEvent(true);
+      setError('');
+      setMessage('');
+
+      const createdEvent = await createEvent(payload);
+
+      setEvents((previousEvents) => [createdEvent, ...previousEvents]);
+      setEventForm(initialEventForm);
+      setMessage('Событие добавлено в базу знаний.');
+    } catch (createError) {
+      setError(`Не удалось создать событие: ${getErrorMessage(createError)}`);
+    } finally {
+      setIsCreatingEvent(false);
+    }
   }
 
-  function applyImportPreview(): void {
-    const modeLabel =
-      importMode === 'smart'
-        ? 'Smart import'
-        : importMode === 'classes'
-        ? 'Classes only'
-        : 'Exams only';
+  async function handleStatusChange(taskId: string, status: ApiTaskStatus): Promise<void> {
+    const previousTasks = tasks;
 
-    setCalendarSourceLabel(`${modeLabel} • ${selectedFileName}`);
-    setIsImportModalOpen(false);
-    setActivePage('calendar');
+    setTasks((currentTasks) =>
+      currentTasks.map((task) => (task.id === taskId ? { ...task, status } : task))
+    );
+
+    if (status === 'cancelled' || status === 'completed') {
+      setPinnedTaskIds((currentIds) => {
+        const nextIds = currentIds.filter((id) => id !== taskId);
+        savePinnedTaskIds(nextIds);
+        return nextIds;
+      });
+    }
+
+    try {
+      setError('');
+      setMessage('');
+
+      const updatedTask = await updateTaskStatus(taskId, status);
+
+      setTasks((currentTasks) =>
+        currentTasks.map((task) => (task.id === taskId ? updatedTask : task))
+      );
+
+      setMessage(
+        status === 'cancelled'
+          ? 'Задача перемещена в историю как удалённая.'
+          : 'Статус задачи обновлён.'
+      );
+    } catch (updateError) {
+      setTasks(previousTasks);
+      setError(`Не удалось обновить статус: ${getErrorMessage(updateError)}`);
+    }
+  }
+
+  async function handleCancelTask(taskId: string): Promise<void> {
+    await handleStatusChange(taskId, 'cancelled');
+  }
+
+  async function handleRestoreTask(taskId: string): Promise<void> {
+    await handleStatusChange(taskId, 'todo');
   }
 
   return (
     <>
       <style>{`
-        * { box-sizing: border-box; }
+        * {
+          box-sizing: border-box;
+        }
+
         :root {
           color-scheme: dark;
-          --bg: #081120;
-          --panel: rgba(20,31,58,0.9);
-          --border: rgba(255,255,255,0.07);
+          --bg: #07111f;
+          --sidebar: #081426;
+          --panel: #111e35;
+          --panel-soft: #16243e;
+          --border: rgba(255, 255, 255, 0.09);
           --text: #f8fafc;
-          --muted: #94a3b8;
-          --blue: #2563eb;
-          --blue-hover: #1d4ed8;
-          --shadow: 0 20px 60px rgba(0,0,0,0.25);
+          --muted: #9fb0c8;
+          --accent: #3b82f6;
+          --accent-soft: rgba(59, 130, 246, 0.16);
+          --danger: #fb7185;
+          --success: #34d399;
+          --shadow: 0 22px 70px rgba(0, 0, 0, 0.28);
         }
+
         body {
           margin: 0;
+          min-width: 1100px;
           font-family: Inter, Arial, sans-serif;
-          background:
-            radial-gradient(circle at top right, rgba(37,99,235,0.12), transparent 18%),
-            linear-gradient(180deg, #06101f 0%, #081120 100%);
           color: var(--text);
+          background:
+            radial-gradient(circle at top right, rgba(59, 130, 246, 0.14), transparent 28%),
+            linear-gradient(180deg, #06101d 0%, #07111f 100%);
         }
-        button, input, select { font: inherit; }
-        button { border: none; cursor: pointer; }
-        .app-shell { min-height: 100vh; display: flex; }
+
+        button,
+        input,
+        textarea,
+        select {
+          font: inherit;
+        }
+
+        button {
+          cursor: pointer;
+        }
+
+        .layout {
+          display: grid;
+          grid-template-columns: 280px 1fr;
+          min-height: 100vh;
+        }
+
         .sidebar {
-          width: 280px; min-width: 280px; padding: 28px 18px;
-          background: linear-gradient(180deg, rgba(8,17,32,0.98), rgba(10,23,48,0.98));
-          border-right: 1px solid rgba(255,255,255,0.07); position: sticky; top: 0; height: 100vh;
+          position: sticky;
+          top: 0;
+          height: 100vh;
+          padding: 28px 18px;
+          background: linear-gradient(180deg, rgba(8, 20, 38, 0.98), rgba(8, 15, 30, 0.98));
+          border-right: 1px solid var(--border);
         }
-        .brand { display: flex; flex-direction: column; gap: 6px; margin-bottom: 28px; }
-        .brand-title { margin: 0; font-size: 2rem; font-weight: 800; letter-spacing: -0.04em; }
-        .brand-subtitle { margin: 0; color: var(--muted); font-size: 0.95rem; }
-        .nav { display: flex; flex-direction: column; gap: 10px; margin-bottom: 24px; }
-        .nav-button {
-          width: 100%; display: flex; align-items: center; justify-content: flex-start;
-          padding: 14px 16px; border-radius: 16px; background: transparent; color: #dbe6f5;
-          transition: background-color 0.2s ease, transform 0.15s ease, color 0.2s ease;
+
+        .brand {
+          margin-bottom: 30px;
         }
-        .nav-button:hover { background: rgba(255,255,255,0.05); transform: translateX(2px); }
-        .nav-button.active {
-          background: linear-gradient(90deg, rgba(37,99,235,0.24), rgba(255,255,255,0.04));
-          color: white; border: 1px solid rgba(255,255,255,0.06);
+
+        .brand h1 {
+          margin: 0 0 8px;
+          font-size: 2rem;
+          letter-spacing: -0.04em;
         }
-        .sidebar-card {
-          margin-top: 24px; padding: 18px; border-radius: 20px; background: var(--panel);
-          border: 1px solid var(--border); box-shadow: var(--shadow);
+
+        .brand p {
+          margin: 0;
+          color: var(--muted);
+          line-height: 1.45;
         }
-        .sidebar-card-title { margin: 0 0 8px 0; font-size: 1rem; font-weight: 700; }
-        .sidebar-card-text { margin: 0 0 14px 0; color: var(--muted); line-height: 1.55; font-size: 0.92rem; }
-        .sidebar-card-button {
-          width: 100%; padding: 12px 14px; border-radius: 14px; background: var(--blue); color: white; font-weight: 600;
+
+        .nav {
+          display: grid;
+          gap: 10px;
         }
-        .sidebar-card-button:hover { background: var(--blue-hover); }
-        .page { flex: 1; padding: 28px 34px 40px; }
+
+        .nav button {
+          width: 100%;
+          padding: 14px 16px;
+          border: 1px solid transparent;
+          border-radius: 16px;
+          text-align: left;
+          color: #dbeafe;
+          background: transparent;
+        }
+
+        .nav button:hover,
+        .nav button.active {
+          border-color: rgba(255, 255, 255, 0.08);
+          background: var(--accent-soft);
+        }
+
+        .sidebar-note {
+          margin-top: 28px;
+          padding: 18px;
+          border: 1px solid var(--border);
+          border-radius: 18px;
+          background: rgba(255, 255, 255, 0.04);
+        }
+
+        .sidebar-note strong {
+          display: block;
+          margin-bottom: 8px;
+        }
+
+        .sidebar-note p {
+          margin: 0;
+          color: var(--muted);
+          line-height: 1.55;
+        }
+
+        .content {
+          padding: 28px 36px 48px;
+        }
+
         .topbar {
-          display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 28px; flex-wrap: wrap;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 20px;
+          margin-bottom: 24px;
         }
-        .search-input {
-          width: min(460px, 100%); background: var(--panel); border: 1px solid var(--border); color: var(--text);
-          padding: 14px 18px; border-radius: 18px; outline: none;
+
+        .topbar h2 {
+          margin: 0;
+          font-size: 1.2rem;
         }
-        .search-input::placeholder { color: var(--muted); }
-        .topbar-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-        .ghost-button, .primary-button, .secondary-button, .month-nav-button {
-          padding: 12px 16px; border-radius: 14px; transition: transform 0.15s ease, background-color 0.2s ease; white-space: nowrap;
+
+        .topbar p {
+          margin: 4px 0 0;
+          color: var(--muted);
         }
-        .ghost-button {
-          background: var(--panel); border: 1px solid var(--border); color: var(--text);
+
+        .actions,
+        .task-actions,
+        .filters {
+          display: flex;
+          gap: 10px;
+          align-items: center;
+          flex-wrap: wrap;
         }
-        .ghost-button:hover, .month-nav-button:hover { background: rgba(255,255,255,0.08); transform: translateY(-1px); }
-        .primary-button { background: var(--blue); color: white; font-weight: 600; }
-        .primary-button:hover { background: var(--blue-hover); transform: translateY(-1px); }
-        .secondary-button, .month-nav-button {
-          background: rgba(255,255,255,0.05); color: white; border: 1px solid var(--border);
+
+        .button {
+          border: 1px solid var(--border);
+          border-radius: 14px;
+          padding: 12px 16px;
+          color: var(--text);
+          background: rgba(255, 255, 255, 0.05);
         }
-        .avatar {
-          width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
-          background: linear-gradient(135deg, #2563eb, #60a5fa); font-weight: 800; color: white; flex-shrink: 0;
+
+        .button.primary {
+          border-color: transparent;
+          background: linear-gradient(135deg, #3b82f6, #2563eb);
         }
-        .page-header { margin-bottom: 28px; }
-        .page-title { margin: 0 0 10px 0; font-size: clamp(2.5rem, 5vw, 4rem); line-height: 1; letter-spacing: -0.05em; }
-        .page-subtitle { margin: 0; color: var(--muted); font-size: 1.05rem; }
-        .overview-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; margin-bottom: 28px; }
-        .stat-card {
-          background: var(--panel); border: 1px solid var(--border); border-radius: 22px; padding: 22px; box-shadow: var(--shadow);
+
+        .button.danger {
+          border-color: rgba(251, 113, 133, 0.35);
+          color: #fecdd3;
+          background: rgba(251, 113, 133, 0.12);
         }
-        .stat-label { margin: 0 0 10px 0; color: var(--muted); font-size: 0.92rem; }
-        .stat-value { margin: 0; font-size: 2rem; font-weight: 800; letter-spacing: -0.03em; }
-        .dashboard-grid { display: grid; grid-template-columns: 1.6fr 1fr; gap: 22px; }
-        .stack { display: flex; flex-direction: column; gap: 22px; }
+
+        .button.success {
+          border-color: rgba(52, 211, 153, 0.35);
+          color: #bbf7d0;
+          background: rgba(52, 211, 153, 0.12);
+        }
+
+        .button.small {
+          padding: 8px 11px;
+          border-radius: 12px;
+          font-size: 0.86rem;
+        }
+
+        .button.active {
+          background: var(--accent-soft);
+          border-color: rgba(59, 130, 246, 0.45);
+        }
+
+        .button:disabled {
+          opacity: 0.55;
+          cursor: not-allowed;
+        }
+
+        .pin-button {
+          position: absolute;
+          top: 14px;
+          right: 14px;
+          width: 36px;
+          height: 36px;
+          display: grid;
+          place-items: center;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 12px;
+          color: #cbd5e1;
+          background: rgba(255, 255, 255, 0.05);
+        }
+
+        .pin-button.active {
+          color: #fef3c7;
+          background: rgba(251, 191, 36, 0.16);
+          border-color: rgba(251, 191, 36, 0.35);
+        }
+
+        .notice {
+          margin-bottom: 16px;
+          padding: 14px 16px;
+          border-radius: 16px;
+          border: 1px solid var(--border);
+          color: #dbeafe;
+          background: rgba(59, 130, 246, 0.12);
+        }
+
+        .notice.error {
+          color: #fecdd3;
+          background: rgba(251, 113, 133, 0.12);
+        }
+
+        .hero {
+          padding: 28px;
+          margin-bottom: 22px;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 28px;
+          background:
+            linear-gradient(135deg, rgba(59, 130, 246, 0.18), rgba(17, 30, 53, 0.95)),
+            var(--panel);
+          box-shadow: var(--shadow);
+        }
+
+        .eyebrow {
+          margin: 0 0 8px;
+          color: #bfdbfe;
+          font-size: 0.82rem;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+        }
+
+        .hero h1 {
+          margin: 0 0 12px;
+          font-size: 2.5rem;
+          line-height: 1.05;
+          letter-spacing: -0.05em;
+        }
+
+        .hero p {
+          margin: 0;
+          max-width: 920px;
+          color: var(--muted);
+          line-height: 1.65;
+        }
+
+        .stats-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 16px;
+          margin: 20px 0 0;
+        }
+
+        .stat-card,
         .panel {
-          background: var(--panel); border: 1px solid var(--border); border-radius: 24px; padding: 24px; box-shadow: var(--shadow);
+          border: 1px solid var(--border);
+          border-radius: 22px;
+          background: rgba(17, 30, 53, 0.82);
         }
-        .panel-header {
-          display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; flex-wrap: wrap;
+
+        .stat-card {
+          padding: 18px;
         }
-        .panel-title { margin: 0 0 6px 0; font-size: 1.45rem; font-weight: 800; letter-spacing: -0.03em; }
-        .panel-subtitle { margin: 0; color: var(--muted); font-size: 0.95rem; }
-        .calendar-header {
-          display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 20px; flex-wrap: wrap;
+
+        .stat-card span {
+          display: block;
+          margin-bottom: 10px;
+          color: var(--muted);
+          font-size: 0.9rem;
         }
-        .calendar-month-title { margin: 0; font-size: 1.4rem; font-weight: 800; letter-spacing: -0.03em; }
-        .calendar-meta { margin: 8px 0 0 0; color: var(--muted); font-size: 0.92rem; line-height: 1.5; }
-        .calendar-header-right { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-        .calendar-weekdays { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
-        .weekday-cell { padding: 0 6px; color: var(--muted); font-size: 0.84rem; font-weight: 700; text-transform: uppercase; }
-        .calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 12px; }
-        .calendar-empty { min-height: 144px; border-radius: 20px; background: rgba(255,255,255,0.015); border: 1px dashed rgba(255,255,255,0.03); }
-        .calendar-day-button {
-          min-height: 144px; border-radius: 20px; padding: 14px; text-align: left; background: rgba(255,255,255,0.03);
-          border: 1px solid rgba(255,255,255,0.04); display: flex; flex-direction: column; gap: 12px; color: var(--text);
+
+        .stat-card strong {
+          font-size: 2rem;
         }
-        .calendar-day-button:hover { background: rgba(255,255,255,0.05); transform: translateY(-1px); }
-        .calendar-day-button.outside-semester { opacity: 0.55; }
-        .calendar-day-button.weekend { background: rgba(255,255,255,0.02); }
-        .calendar-day-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
-        .calendar-day-number { margin: 0; font-size: 1rem; font-weight: 800; }
-        .cycle-badge {
-          padding: 5px 8px; border-radius: 999px; background: rgba(37,99,235,0.18); color: #bfdbfe; font-size: 0.75rem; font-weight: 700;
+
+        .facts {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 10px;
+          margin-top: 22px;
         }
-        .calendar-summary { display: flex; flex-direction: column; gap: 6px; }
-        .calendar-summary-line1 { margin: 0; font-size: 0.9rem; font-weight: 700; color: #e2e8f0; }
-        .calendar-summary-line2 { margin: 0; font-size: 0.82rem; color: var(--muted); }
-        .calendar-preview-list { display: flex; flex-direction: column; gap: 6px; margin-top: auto; }
-        .calendar-preview-chip {
-          display: inline-flex; align-items: center; width: fit-content; padding: 5px 9px; border-radius: 999px; font-size: 0.76rem; font-weight: 700;
+
+        .fact {
+          padding: 9px 13px;
+          border-radius: 999px;
+          color: #dbeafe;
+          background: rgba(255, 255, 255, 0.08);
         }
-        .chip-lecture { background: rgba(37,99,235,0.18); color: #bfdbfe; }
-        .chip-lab { background: rgba(34,197,94,0.18); color: #bbf7d0; }
-        .chip-practice { background: rgba(245,158,11,0.18); color: #fde68a; }
-        .chip-exam { background: rgba(239,68,68,0.18); color: #fecaca; }
-        .task-list { display: flex; flex-direction: column; gap: 14px; }
-        .task-card {
-          display: flex; justify-content: space-between; gap: 16px; padding: 18px; border-radius: 18px;
-          background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.04);
+
+        .grid-two {
+          display: grid;
+          grid-template-columns: minmax(0, 1.15fr) minmax(360px, 0.85fr);
+          gap: 20px;
+          align-items: start;
         }
-        .task-card.completed { opacity: 0.7; }
-        .task-left { display: flex; align-items: flex-start; gap: 14px; min-width: 0; }
-        .task-check { margin-top: 4px; width: 18px; height: 18px; accent-color: var(--blue); flex-shrink: 0; }
-        .task-title { margin: 0 0 8px 0; font-size: 1rem; font-weight: 700; }
-        .task-meta { display: flex; flex-wrap: wrap; gap: 10px; color: var(--muted); font-size: 0.9rem; }
-        .task-tag {
-          display: inline-flex; align-items: center; padding: 5px 10px; border-radius: 999px; background: rgba(37,99,235,0.16);
-          color: #bfdbfe; font-size: 0.78rem; font-weight: 700;
+
+        .panel {
+          padding: 22px;
         }
-        .priority-badge { display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 700; }
-        .priority-high { background: rgba(239,68,68,0.16); color: #fecaca; }
-        .priority-medium { background: rgba(245,158,11,0.16); color: #fde68a; }
-        .priority-low { background: rgba(34,197,94,0.16); color: #bbf7d0; }
-        .feature-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
-        .feature-card {
-          background: var(--panel); border: 1px solid var(--border); border-radius: 22px; padding: 22px; min-height: 180px; box-shadow: var(--shadow);
+
+        .panel h3 {
+          margin: 0 0 8px;
+          font-size: 1.35rem;
         }
-        .feature-label {
-          display: inline-flex; padding: 7px 10px; border-radius: 999px; background: rgba(37,99,235,0.15); color: #bfdbfe;
-          font-size: 0.78rem; font-weight: 700; margin-bottom: 14px;
+
+        .panel-description {
+          margin: 0 0 18px;
+          color: var(--muted);
+          line-height: 1.55;
         }
-        .feature-title { margin: 0 0 10px 0; font-size: 1.2rem; font-weight: 800; }
-        .feature-text { margin: 0; color: var(--muted); line-height: 1.65; }
-        .empty-note { margin: 0; color: var(--muted); line-height: 1.6; }
-        .modal-overlay {
-          position: fixed; inset: 0; background: rgba(2,6,23,0.72); display: flex; align-items: center; justify-content: center;
-          padding: 20px; z-index: 1000; backdrop-filter: blur(6px);
+
+        .form-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
         }
-        .details-modal {
-          width: min(720px, 100%); background: linear-gradient(180deg, #0c1730 0%, #101c38 100%);
-          border: 1px solid var(--border); border-radius: 24px; padding: 24px; box-shadow: 0 30px 80px rgba(0,0,0,0.45);
-          max-height: 90vh; overflow: auto;
+
+        .form-field {
+          display: grid;
+          gap: 8px;
         }
-        .modal-header {
-          display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 20px;
+
+        .form-field.full {
+          grid-column: 1 / -1;
         }
-        .modal-title { margin: 0 0 8px 0; font-size: 1.4rem; font-weight: 800; }
-        .modal-subtitle { margin: 0; color: var(--muted); font-size: 0.95rem; line-height: 1.5; }
-        .modal-close-button {
-          width: 38px; height: 38px; border-radius: 12px; background: rgba(255,255,255,0.06); color: white; font-size: 1rem;
+
+        .form-field label {
+          color: #cbd5e1;
+          font-size: 0.9rem;
         }
-        .modal-close-button:hover { background: rgba(255,255,255,0.1); }
-        .details-stack, .import-form, .task-form { display: flex; flex-direction: column; gap: 14px; }
-        .details-card {
-          padding: 18px; border-radius: 18px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.05);
+
+        .input,
+        .textarea,
+        .select {
+          width: 100%;
+          border: 1px solid var(--border);
+          border-radius: 14px;
+          padding: 12px 14px;
+          color: var(--text);
+          background: rgba(5, 12, 24, 0.72);
+          outline: none;
         }
-        .details-time { margin: 0 0 8px 0; color: #bfdbfe; font-size: 0.88rem; font-weight: 700; }
-        .details-title { margin: 0 0 8px 0; font-size: 1rem; font-weight: 800; }
-        .details-meta { margin: 0; color: var(--muted); line-height: 1.6; font-size: 0.92rem; }
-        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-        .form-group { display: flex; flex-direction: column; gap: 8px; }
-        .form-label { font-size: 0.9rem; color: #dbe6f5; font-weight: 600; }
-        .form-input {
-          width: 100%; background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--text);
-          padding: 13px 14px; border-radius: 14px; outline: none;
+
+        .textarea {
+          min-height: 86px;
+          resize: vertical;
         }
-        .form-input::placeholder { color: var(--muted); }
-        .form-error {
-          margin: 0; padding: 12px 14px; border-radius: 14px; background: rgba(239,68,68,0.12);
-          border: 1px solid rgba(239,68,68,0.24); color: #fecaca; font-size: 0.9rem;
+
+        .task-list,
+        .event-list,
+        .section-stack,
+        .doc-list {
+          display: grid;
+          gap: 12px;
         }
-        .import-status { margin: 0; color: var(--muted); line-height: 1.5; }
-        .option-row { display: flex; gap: 12px; flex-wrap: wrap; }
-        .option-button {
-          padding: 12px 14px; border-radius: 14px; background: rgba(255,255,255,0.04); color: var(--text); border: 1px solid var(--border);
+
+        .task-card,
+        .event-card,
+        .doc-card {
+          position: relative;
+          display: grid;
+          gap: 12px;
+          padding: 18px;
+          border: 1px solid var(--border);
+          border-radius: 18px;
+          background: rgba(255, 255, 255, 0.04);
         }
-        .option-button.active {
-          background: rgba(37,99,235,0.18); border-color: rgba(37,99,235,0.6); color: #dbeafe;
+
+        .task-card.pinned {
+          border-color: rgba(251, 191, 36, 0.42);
+          background:
+            linear-gradient(135deg, rgba(251, 191, 36, 0.08), rgba(255, 255, 255, 0.04));
         }
-        .modal-actions {
-          display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; flex-wrap: wrap;
+
+        .task-card.cancelled {
+          opacity: 0.62;
+          filter: grayscale(0.35);
         }
-        @media (max-width: 1300px) {
-          .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-          .dashboard-grid { grid-template-columns: 1fr; }
-          .feature-grid { grid-template-columns: 1fr; }
+
+        .task-card.completed {
+          opacity: 0.78;
         }
-        @media (max-width: 1050px) {
-          .calendar-weekdays, .calendar-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+        .task-card-header {
+          display: flex;
+          justify-content: space-between;
+          gap: 16px;
+          align-items: flex-start;
+          padding-right: 44px;
         }
-        @media (max-width: 980px) {
-          .sidebar { display: none; }
-          .page { padding: 22px; }
-          .topbar { flex-direction: column; align-items: stretch; }
-          .topbar-right { justify-content: flex-start; }
+
+        .task-title,
+        .event-title {
+          margin: 0 0 6px;
+          font-size: 1.05rem;
         }
-        @media (max-width: 640px) {
-          .overview-grid { grid-template-columns: 1fr; }
-          .calendar-weekdays, .calendar-grid { grid-template-columns: 1fr; }
-          .page-title { font-size: 2.4rem; }
-          .form-row { grid-template-columns: 1fr; }
+
+        .task-description,
+        .event-description {
+          margin: 0;
+          color: var(--muted);
+          line-height: 1.5;
+        }
+
+        .badges {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
+        .badge {
+          padding: 7px 10px;
+          border-radius: 999px;
+          color: #dbeafe;
+          background: rgba(255, 255, 255, 0.08);
+          font-size: 0.82rem;
+        }
+
+        .badge.high {
+          color: #fecdd3;
+          background: rgba(251, 113, 133, 0.14);
+        }
+
+        .badge.success {
+          color: #bbf7d0;
+          background: rgba(52, 211, 153, 0.14);
+        }
+
+        .badge.cancelled {
+          color: #fecdd3;
+          background: rgba(251, 113, 133, 0.16);
+        }
+
+        .badge.pinned {
+          color: #fef3c7;
+          background: rgba(251, 191, 36, 0.16);
+        }
+
+        .status-select {
+          min-width: 160px;
+        }
+
+        .knowledge-table {
+          width: 100%;
+          border-collapse: collapse;
+          overflow: hidden;
+          border-radius: 16px;
+        }
+
+        .knowledge-table th,
+        .knowledge-table td {
+          padding: 13px 12px;
+          border-bottom: 1px solid var(--border);
+          text-align: left;
+        }
+
+        .knowledge-table th {
+          color: #bfdbfe;
+          font-weight: 700;
+          background: rgba(255, 255, 255, 0.04);
+        }
+
+        .knowledge-table td {
+          color: var(--muted);
+        }
+
+        .empty {
+          padding: 26px;
+          border: 1px dashed var(--border);
+          border-radius: 18px;
+          color: var(--muted);
+          text-align: center;
+        }
+
+        .doc-card strong {
+          display: block;
+          margin-bottom: 6px;
+        }
+
+        .doc-card code {
+          color: #bfdbfe;
+        }
+
+        @media (max-width: 1200px) {
+          body {
+            min-width: 0;
+          }
+
+          .layout {
+            grid-template-columns: 1fr;
+          }
+
+          .sidebar {
+            position: static;
+            height: auto;
+          }
+
+          .stats-grid,
+          .grid-two {
+            grid-template-columns: 1fr;
+          }
         }
       `}</style>
 
-      <div className="app-shell">
+      <div className="layout">
         <aside className="sidebar">
           <div className="brand">
-            <h1 className="brand-title">AI Assistant</h1>
-            <p className="brand-subtitle">Student planning workspace</p>
+            <h1>AI Assistant</h1>
+            <p>Учебный MVP базы знаний для планирования задач.</p>
           </div>
 
           <nav className="nav">
             {navItems.map((item) => (
               <button
                 key={item.id}
-                className={`nav-button ${activePage === item.id ? 'active' : ''}`}
+                className={activePage === item.id ? 'active' : ''}
                 onClick={() => setActivePage(item.id)}
               >
                 {item.label}
@@ -806,624 +1006,687 @@ function App() {
             ))}
           </nav>
 
-          <div className="sidebar-card">
-            <h3 className="sidebar-card-title">Quick action</h3>
-            <p className="sidebar-card-text">
-              Add a custom study task with title, subject, day, time, priority and tag.
+          <div className="sidebar-note">
+            <strong>Мягкое удаление</strong>
+            <p>
+              Удалённая задача не исчезает из базы. Она получает статус “Удалена”
+              и переносится в историю.
             </p>
-            <button className="sidebar-card-button" onClick={openTaskModal}>
-              Add task
-            </button>
           </div>
         </aside>
 
-        <main className="page">
-        {activePage === 'dashboard' && (
-          <KnowledgeBasePanel
-            totalTasks={tasks.length}
-            activeTasks={activeTasksCount}
-            completedTasks={completedTasksCount}
-            highPriorityTasks={highPriorityCount}
-          />
-        )}
-
+        <main className="content">
           <header className="topbar">
-            <input
-              className="search-input"
-              type="text"
-              placeholder="Search tasks, classes, days..."
-              value={searchValue}
-              onChange={(event) => setSearchValue(event.target.value)}
-            />
+            <div>
+              <h2>Интерфейс базы знаний</h2>
+              <p>Frontend показывает текущее состояние знаний, сохранённых через backend.</p>
+            </div>
 
-            <div className="topbar-right">
-              <button className="ghost-button" onClick={() => setActivePage('calendar')}>
-                Calendar
+            <div className="actions">
+              <button className="button" onClick={() => void loadKnowledgeBase()}>
+                Обновить
               </button>
-              <button className="secondary-button" onClick={() => setIsImportModalOpen(true)}>
-                Import schedule
+              <button className="button primary" onClick={() => setActivePage('tasks')}>
+                Добавить задачу
               </button>
-              <button className="primary-button" onClick={openTaskModal}>
-                New Task
-              </button>
-              <div className="avatar">X</div>
             </div>
           </header>
 
+          {message && <div className="notice">{message}</div>}
+          {error && <div className="notice error">{error}</div>}
+
           {activePage === 'dashboard' && (
             <>
-              <section className="page-header">
-                <h2 className="page-title">Dashboard</h2>
-                <p className="page-subtitle">
-                  Clean dashboard with task creation, separate schedule import and stable semester calendar.
+              <section className="hero">
+                <p className="eyebrow">Knowledge Base MVP</p>
+                <h1>База знаний ассистента планирования</h1>
+                <p>
+                  Система хранит структурированные знания о задачах, событиях,
+                  дедлайнах, приоритетах, статусах и зависимостях. Активные задачи
+                  отображаются отдельно, а выполненные и удалённые переносятся в историю.
                 </p>
-              </section>
 
-              <section className="overview-grid">
-                <div className="stat-card">
-                  <p className="stat-label">Tasks Today</p>
-                  <p className="stat-value">{activeTasksCount}</p>
-                </div>
-
-                <div className="stat-card">
-                  <p className="stat-label">Completed Tasks</p>
-                  <p className="stat-value">{completedTasksCount}</p>
-                </div>
-
-                <div className="stat-card">
-                  <p className="stat-label">High Priority</p>
-                  <p className="stat-value">{highPriorityCount}</p>
-                </div>
-
-                <div className="stat-card">
-                  <p className="stat-label">Calendar Source</p>
-                  <p className="stat-value" style={{ fontSize: '1.05rem' }}>{calendarSourceLabel}</p>
-                </div>
-              </section>
-
-              <section className="dashboard-grid">
-                <div className="stack">
-                  <section className="panel">
-                    <div className="panel-header">
-                      <div>
-                        <h3 className="panel-title">Today's Tasks</h3>
-                        <p className="panel-subtitle">Task preview for the current frontend shell</p>
-                      </div>
-                      <button className="primary-button" onClick={openTaskModal}>
-                        Add task
-                      </button>
-                    </div>
-
-                    <div className="task-list">
-                      {isTasksLoading && (
-                        <p className="empty-note">Loading tasks from backend...</p>
-                      )}
-
-                      {tasksError && (
-                        <p className="form-error">{tasksError}</p>
-                      )}
-
-                      {filteredTasks.map((task) => (
-                        <article
-                          key={task.id}
-                          className={`task-card ${task.completed ? 'completed' : ''}`}
-                        >
-                          <div className="task-left">
-                            <input
-                              className="task-check"
-                              type="checkbox"
-                              checked={task.completed}
-                              onChange={() => toggleTask(task.id)}
-                            />
-
-                            <div>
-                              <p className="task-title">{task.title}</p>
-                              <div className="task-meta">
-                                <span>{task.course}</span>
-                                <span>{task.deadline}</span>
-                                <span className="task-tag">{task.customTag}</span>
-                              </div>
-                            </div>
-                          </div>
-
-                          <div
-                            className={`priority-badge ${
-                              task.priority === 'High'
-                                ? 'priority-high'
-                                : task.priority === 'Medium'
-                                ? 'priority-medium'
-                                : 'priority-low'
-                            }`}
-                          >
-                            {task.priority}
-                          </div>
-                        </article>
-                      ))}
-                    </div>
-                  </section>
-
-                  <section className="panel">
-                    <div className="panel-header">
-                      <div>
-                        <h3 className="panel-title">Calendar Integration</h3>
-                        <p className="panel-subtitle">Import from external sources without changing dashboard structure</p>
-                      </div>
-                      <button className="secondary-button" onClick={() => setIsImportModalOpen(true)}>
-                        Import schedule
-                      </button>
-                    </div>
-
-                    <p className="empty-note">
-                      Month grid, clickable day cells and detailed popup remain on the calendar page.
-                      Import is handled in a separate modal and does not replace dashboard blocks.
-                    </p>
-                  </section>
-                </div>
-
-                <div className="stack">
-                  <section className="panel">
-                    <div className="panel-header">
-                      <div>
-                        <h3 className="panel-title">AI Recommendations</h3>
-                        <p className="panel-subtitle">Visual placeholder for future recommendation logic</p>
-                      </div>
-                    </div>
-
-                    <div className="task-list">
-                      <article className="task-card">
-                        <div>
-                          <p className="task-title">Start with the hardest task first</p>
-                          <p className="empty-note">
-                            Later backend can use imported schedule density and deadlines to build these suggestions.
-                          </p>
-                        </div>
-                      </article>
-
-                      <article className="task-card">
-                        <div>
-                          <p className="task-title">Keep tasks and classes in one workspace</p>
-                          <p className="empty-note">
-                            Newly created tasks now appear immediately in Dashboard and Tasks.
-                          </p>
-                        </div>
-                      </article>
-                    </div>
-                  </section>
-                </div>
-              </section>
-            </>
-          )}
-
-          {activePage === 'calendar' && (
-            <>
-              <section className="page-header">
-                <h2 className="page-title">Calendar</h2>
-                <p className="page-subtitle">
-                  Month grid stays the same. User import only updates source status for now, while the calendar view remains stable.
-                </p>
-              </section>
-
-              <section className="overview-grid">
-                <div className="stat-card">
-                  <p className="stat-label">Semester Start</p>
-                  <p className="stat-value">09 Feb</p>
-                </div>
-
-                <div className="stat-card">
-                  <p className="stat-label">Cycle Length</p>
-                  <p className="stat-value">4 weeks</p>
-                </div>
-
-                <div className="stat-card">
-                  <p className="stat-label">Active Month</p>
-                  <p className="stat-value" style={{ fontSize: '1.15rem' }}>{currentMonth.label}</p>
-                </div>
-
-                <div className="stat-card">
-                  <p className="stat-label">Imported Source</p>
-                  <p className="stat-value" style={{ fontSize: '1.05rem' }}>{calendarSourceLabel}</p>
-                </div>
-              </section>
-
-              <section className="panel">
-                <div className="calendar-header">
-                  <div>
-                    <h3 className="calendar-month-title">{currentMonth.label}</h3>
-                    <p className="calendar-meta">
-                      Semester months: February 2026 → June 2026. Start point: 09.02.2026 (Monday).
-                      Current source: {calendarSourceLabel}.
-                    </p>
+                <div className="stats-grid">
+                  <div className="stat-card">
+                    <span>Всего задач</span>
+                    <strong>{totalTasks}</strong>
                   </div>
-
-                  <div className="calendar-header-right">
-                    <button
-                      className="month-nav-button"
-                      onClick={() => setCurrentMonthIndex((prev) => Math.max(prev - 1, 0))}
-                      disabled={currentMonthIndex === 0}
-                    >
-                      ← Previous
-                    </button>
-
-                    <button className="secondary-button" onClick={() => setIsImportModalOpen(true)}>
-                      Import schedule
-                    </button>
-
-                    <button
-                      className="month-nav-button"
-                      onClick={() =>
-                        setCurrentMonthIndex((prev) => Math.min(prev + 1, semesterMonths.length - 1))
-                      }
-                      disabled={currentMonthIndex === semesterMonths.length - 1}
-                    >
-                      Next →
-                    </button>
+                  <div className="stat-card">
+                    <span>Активные</span>
+                    <strong>{activeTasks}</strong>
+                  </div>
+                  <div className="stat-card">
+                    <span>События</span>
+                    <strong>{events.length}</strong>
+                  </div>
+                  <div className="stat-card">
+                    <span>Удалённые</span>
+                    <strong>{cancelledTasks}</strong>
                   </div>
                 </div>
 
-                <div className="calendar-weekdays">
-                  {weekdayLabels.map((label) => (
-                    <div key={label} className="weekday-cell">{label}</div>
-                  ))}
-                </div>
-
-                <div className="calendar-grid">
-                  {monthCells.map((cell, index) => {
-                    if (!cell) return <div key={`empty-${index}`} className="calendar-empty" />;
-
-                    const daySummary = getDaySummary(cell);
-                    const cycleWeek = getCycleWeek(cell);
-                    const dayItems = getScheduleForDate(cell);
-                    const inSemester = isDateInSemester(cell);
-                    const weekday = getMondayIndex(cell);
-                    const weekend = weekday === 7;
-
-                    return (
-                      <button
-                        key={cell.toISOString()}
-                        className={`calendar-day-button ${!inSemester ? 'outside-semester' : ''} ${weekend ? 'weekend' : ''}`}
-                        onClick={() => openDayDetails(cell)}
-                      >
-                        <div className="calendar-day-top">
-                          <p className="calendar-day-number">{cell.getDate()}</p>
-                          {cycleWeek ? <span className="cycle-badge">W{cycleWeek}</span> : <span className="cycle-badge">Off</span>}
-                        </div>
-
-                        <div className="calendar-summary">
-                          <p className="calendar-summary-line1">{daySummary.line1}</p>
-                          <p className="calendar-summary-line2">{daySummary.line2}</p>
-                        </div>
-
-                        <div className="calendar-preview-list">
-                          {dayItems.slice(0, 2).map((item) => (
-                            <span
-                              key={`${cell.toISOString()}-${item.time}-${item.title}`}
-                              className={`calendar-preview-chip ${
-                                item.type === 'lecture'
-                                  ? 'chip-lecture'
-                                  : item.type === 'lab'
-                                  ? 'chip-lab'
-                                  : item.type === 'practice'
-                                  ? 'chip-practice'
-                                  : 'chip-exam'
-                              }`}
-                            >
-                              {item.time} • {item.title}
-                            </span>
-                          ))}
-                        </div>
-                      </button>
-                    );
-                  })}
+                <div className="facts">
+                  <span className="fact">Task</span>
+                  <span className="fact">Event</span>
+                  <span className="fact">Dependency</span>
+                  <span className="fact">Deadline</span>
+                  <span className="fact">Priority</span>
+                  <span className="fact">Status</span>
+                  <span className="fact">Soft delete</span>
+                  <span className="fact">Pinned task</span>
                 </div>
               </section>
+
+              <div className="section-stack">
+                {pinnedTasks.length > 0 && (
+                  <section className="panel">
+                    <h3>Закреплённые задачи</h3>
+                    <p className="panel-description">
+                      Закрепление хранится на frontend и помогает держать важные активные
+                      задачи наверху.
+                    </p>
+                    <TaskList
+                      tasks={pinnedTasks}
+                      isLoading={isLoading}
+                      pinnedTaskIds={pinnedTaskIds}
+                      showDeleteButton
+                      showPinButton
+                      onStatusChange={handleStatusChange}
+                      onCancelTask={handleCancelTask}
+                      onRestoreTask={handleRestoreTask}
+                      onTogglePinned={togglePinnedTask}
+                    />
+                  </section>
+                )}
+
+                <div className="grid-two">
+                  <section className="panel">
+                    <h3>Активные задачи</h3>
+                    <p className="panel-description">
+                      Здесь показана текущая работа. Исторические задачи сюда не попадают.
+                    </p>
+
+                    <TaskFilters activeFilter={activeFilter} onChange={setActiveFilter} />
+
+                    <TaskList
+                      tasks={regularActiveTasks.slice(0, 6)}
+                      isLoading={isLoading}
+                      pinnedTaskIds={pinnedTaskIds}
+                      showDeleteButton
+                      showPinButton
+                      onStatusChange={handleStatusChange}
+                      onCancelTask={handleCancelTask}
+                      onRestoreTask={handleRestoreTask}
+                      onTogglePinned={togglePinnedTask}
+                    />
+                  </section>
+
+                  <section className="panel">
+                    <h3>Состояние базы знаний</h3>
+                    <p className="panel-description">
+                      Эти признаки нужны для демонстрации, что система работает через
+                      backend, правила и долговременное хранилище.
+                    </p>
+
+                    <table className="knowledge-table">
+                      <tbody>
+                        <tr>
+                          <th>Можно планировать</th>
+                          <td>{schedulableTasks}</td>
+                        </tr>
+                        <tr>
+                          <th>Высокий приоритет</th>
+                          <td>{highPriorityTasks}</td>
+                        </tr>
+                        <tr>
+                          <th>Выполненные</th>
+                          <td>{completedTasks}</td>
+                        </tr>
+                        <tr>
+                          <th>Зависимости</th>
+                          <td>{dependenciesCount}</td>
+                        </tr>
+                        <tr>
+                          <th>Хранилище</th>
+                          <td>PostgreSQL</td>
+                        </tr>
+                        <tr>
+                          <th>Слой знаний</th>
+                          <td>KnowledgeService</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </section>
+                </div>
+              </div>
             </>
           )}
 
           {activePage === 'tasks' && (
-            <>
-              <section className="page-header">
-                <h2 className="page-title">Tasks</h2>
-                <p className="page-subtitle">Create, review and complete your study tasks.</p>
+            <div className="grid-two">
+              <section className="panel">
+                <h3>Добавить задачу</h3>
+                <p className="panel-description">
+                  Новая задача сохраняется как факт `Task` в базе знаний.
+                </p>
+
+                <div className="form-grid">
+                  <div className="form-field full">
+                    <label>Название</label>
+                    <input
+                      className="input"
+                      value={taskForm.title}
+                      onChange={(event) => updateTaskFormField('title', event.target.value)}
+                      placeholder="Например: подготовить отчёт по лабораторной"
+                    />
+                  </div>
+
+                  <div className="form-field full">
+                    <label>Описание</label>
+                    <textarea
+                      className="textarea"
+                      value={taskForm.description}
+                      onChange={(event) => updateTaskFormField('description', event.target.value)}
+                      placeholder="Кратко опиши, что нужно сделать"
+                    />
+                  </div>
+
+                  <div className="form-field">
+                    <label>Длительность, минут</label>
+                    <input
+                      className="input"
+                      type="number"
+                      min="15"
+                      max="1440"
+                      value={taskForm.estimatedMinutes}
+                      onChange={(event) =>
+                        updateTaskFormField('estimatedMinutes', event.target.value)
+                      }
+                    />
+                  </div>
+
+                  <div className="form-field">
+                    <label>Приоритет</label>
+                    <select
+                      className="select"
+                      value={taskForm.priority}
+                      onChange={(event) => updateTaskFormField('priority', event.target.value)}
+                    >
+                      <option value="1">1 — высокий</option>
+                      <option value="2">2 — средний</option>
+                      <option value="3">3 — низкий</option>
+                      <option value="4">4 — минимальный</option>
+                    </select>
+                  </div>
+
+                  <div className="form-field">
+                    <label>Дата дедлайна</label>
+                    <input
+                      className="input"
+                      type="date"
+                      value={taskForm.deadlineDate}
+                      onChange={(event) => updateTaskFormField('deadlineDate', event.target.value)}
+                    />
+                  </div>
+
+                  <div className="form-field">
+                    <label>Время дедлайна</label>
+                    <input
+                      className="input"
+                      type="time"
+                      value={taskForm.deadlineTime}
+                      onChange={(event) => updateTaskFormField('deadlineTime', event.target.value)}
+                    />
+                  </div>
+
+                  <div className="form-field">
+                    <label>Рабочая область</label>
+                    <input
+                      className="input"
+                      value={taskForm.workspaceId}
+                      onChange={(event) => updateTaskFormField('workspaceId', event.target.value)}
+                    />
+                  </div>
+
+                  <div className="form-field">
+                    <label>Проект / дисциплина</label>
+                    <input
+                      className="input"
+                      value={taskForm.projectId}
+                      onChange={(event) => updateTaskFormField('projectId', event.target.value)}
+                      placeholder="например: Базы знаний"
+                    />
+                  </div>
+
+                  <div className="form-field full">
+                    <label>Зависит от задачи</label>
+                    <select
+                      className="select"
+                      value={taskForm.dependsOnTaskId}
+                      onChange={(event) =>
+                        updateTaskFormField('dependsOnTaskId', event.target.value)
+                      }
+                    >
+                      <option value="">Нет зависимости</option>
+                      {activeTasksList.map((task) => (
+                        <option key={task.id} value={task.id}>
+                          {task.title}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="form-field full">
+                    <button
+                      className="button primary"
+                      disabled={isCreatingTask}
+                      onClick={() => void handleCreateTask()}
+                    >
+                      {isCreatingTask ? 'Сохранение...' : 'Сохранить в базу знаний'}
+                    </button>
+                  </div>
+                </div>
               </section>
 
               <section className="panel">
-                <div className="panel-header">
-                  <div>
-                    <h3 className="panel-title">Task List</h3>
-                    <p className="panel-subtitle">New tasks are added locally and displayed immediately.</p>
-                  </div>
+                <h3>Активные задачи</h3>
+                <p className="panel-description">
+                  Удалённые и выполненные задачи не отображаются здесь, а переносятся
+                  в историю.
+                </p>
 
-                  <button className="primary-button" onClick={openTaskModal}>
-                    Add task
-                  </button>
-                </div>
+                <TaskFilters activeFilter={activeFilter} onChange={setActiveFilter} />
 
-                <div className="task-list">
-                  {isTasksLoading && (
-                    <p className="empty-note">Loading tasks from backend...</p>
-                  )}
-
-                  {tasksError && (
-                    <p className="form-error">{tasksError}</p>
-                  )}
-
-                  {filteredTasks.map((task) => (
-                    <article
-                      key={task.id}
-                      className={`task-card ${task.completed ? 'completed' : ''}`}
-                    >
-                      <div className="task-left">
-                        <input
-                          className="task-check"
-                          type="checkbox"
-                          checked={task.completed}
-                          onChange={() => toggleTask(task.id)}
-                        />
-
-                        <div>
-                          <p className="task-title">{task.title}</p>
-                          <div className="task-meta">
-                            <span>{task.course}</span>
-                            <span>{task.deadline}</span>
-                            <span className="task-tag">{task.customTag}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div
-                        className={`priority-badge ${
-                          task.priority === 'High'
-                            ? 'priority-high'
-                            : task.priority === 'Medium'
-                            ? 'priority-medium'
-                            : 'priority-low'
-                        }`}
-                      >
-                        {task.priority}
-                      </div>
-                    </article>
-                  ))}
-                </div>
+                <TaskList
+                  tasks={[...pinnedTasks, ...regularActiveTasks]}
+                  isLoading={isLoading}
+                  pinnedTaskIds={pinnedTaskIds}
+                  showDeleteButton
+                  showPinButton
+                  onStatusChange={handleStatusChange}
+                  onCancelTask={handleCancelTask}
+                  onRestoreTask={handleRestoreTask}
+                  onTogglePinned={togglePinnedTask}
+                />
               </section>
-            </>
+            </div>
           )}
 
-          {(activePage === 'projects' || activePage === 'analytics' || activePage === 'settings') && (
-            <>
-              <section className="page-header">
-                <h2 className="page-title">{activePage.charAt(0).toUpperCase() + activePage.slice(1)}</h2>
-                <p className="page-subtitle">Frontend placeholder page.</p>
+          {activePage === 'history' && (
+            <section className="panel">
+              <h3>История задач</h3>
+              <p className="panel-description">
+                Здесь отображаются выполненные и удалённые задачи. Удаление реализовано
+                мягко: задача получает статус “Удалена”, но остаётся в базе знаний.
+              </p>
+
+              <HistoryFilters historyFilter={historyFilter} onChange={setHistoryFilter} />
+
+              <TaskList
+                tasks={filteredHistoryTasks}
+                isLoading={isLoading}
+                pinnedTaskIds={pinnedTaskIds}
+                isHistory
+                onStatusChange={handleStatusChange}
+                onCancelTask={handleCancelTask}
+                onRestoreTask={handleRestoreTask}
+                onTogglePinned={togglePinnedTask}
+              />
+            </section>
+          )}
+
+          {activePage === 'calendar' && (
+            <div className="grid-two">
+              <section className="panel">
+                <h3>Добавить событие</h3>
+                <p className="panel-description">
+                  Событие сохраняется как факт `Event` и описывает занятый временной
+                  интервал пользователя.
+                </p>
+
+                <div className="form-grid">
+                  <div className="form-field full">
+                    <label>Название события</label>
+                    <input
+                      className="input"
+                      value={eventForm.title}
+                      onChange={(event) => updateEventFormField('title', event.target.value)}
+                      placeholder="Например: лекция по базам знаний"
+                    />
+                  </div>
+
+                  <div className="form-field">
+                    <label>Дата начала</label>
+                    <input
+                      className="input"
+                      type="date"
+                      value={eventForm.startDate}
+                      onChange={(event) => updateEventFormField('startDate', event.target.value)}
+                    />
+                  </div>
+
+                  <div className="form-field">
+                    <label>Время начала</label>
+                    <input
+                      className="input"
+                      type="time"
+                      value={eventForm.startTime}
+                      onChange={(event) => updateEventFormField('startTime', event.target.value)}
+                    />
+                  </div>
+
+                  <div className="form-field">
+                    <label>Дата окончания</label>
+                    <input
+                      className="input"
+                      type="date"
+                      value={eventForm.endDate}
+                      onChange={(event) => updateEventFormField('endDate', event.target.value)}
+                    />
+                  </div>
+
+                  <div className="form-field">
+                    <label>Время окончания</label>
+                    <input
+                      className="input"
+                      type="time"
+                      value={eventForm.endTime}
+                      onChange={(event) => updateEventFormField('endTime', event.target.value)}
+                    />
+                  </div>
+
+                  <div className="form-field full">
+                    <label>Источник</label>
+                    <select
+                      className="select"
+                      value={eventForm.source}
+                      onChange={(event) => updateEventFormField('source', event.target.value)}
+                    >
+                      <option value="manual">manual — ручной ввод</option>
+                      <option value="university-schedule">university-schedule — расписание</option>
+                      <option value="google-calendar">google-calendar — календарь</option>
+                      <option value="mock">mock — тестовый источник</option>
+                    </select>
+                  </div>
+
+                  <div className="form-field full">
+                    <button
+                      className="button primary"
+                      disabled={isCreatingEvent}
+                      onClick={() => void handleCreateEvent()}
+                    >
+                      {isCreatingEvent ? 'Сохранение...' : 'Сохранить событие'}
+                    </button>
+                  </div>
+                </div>
               </section>
 
-              <section className="feature-grid">
-                <article className="feature-card">
-                  <span className="feature-label">Feature in development</span>
-                  <h3 className="feature-title">Semester-aware workspace</h3>
-                  <p className="feature-text">
-                    This block can later use the same calendar logic and imported timetable data.
-                  </p>
-                </article>
+              <section className="panel">
+                <h3>События базы знаний</h3>
+                <p className="panel-description">
+                  Список загружается из backend API `/v1/events`.
+                </p>
 
-                <article className="feature-card">
-                  <span className="feature-label">Feature in development</span>
-                  <h3 className="feature-title">Task + calendar sync</h3>
-                  <p className="feature-text">
-                    Import flow and task creation are separated, so the dashboard stays stable.
-                  </p>
-                </article>
+                <EventList events={events} isLoading={isEventsLoading} />
               </section>
-            </>
+            </div>
+          )}
+
+          {activePage === 'docs' && (
+            <section className="panel">
+              <h3>Документация проекта</h3>
+              <p className="panel-description">
+                Эти документы описывают проект именно как MVP базы знаний для 4 семестра.
+              </p>
+
+              <div className="doc-list">
+                <div className="doc-card">
+                  <strong>Описание базы знаний</strong>
+                  <code>docs/knowledge_base.md</code>
+                </div>
+                <div className="doc-card">
+                  <strong>Схема PostgreSQL</strong>
+                  <code>docs/database_schema.md</code>
+                </div>
+                <div className="doc-card">
+                  <strong>Проверка и тестирование</strong>
+                  <code>docs/testing.md</code>
+                </div>
+                <div className="doc-card">
+                  <strong>Модуль правил</strong>
+                  <code>apps/api/app/modules/knowledge/rules.py</code>
+                </div>
+                <div className="doc-card">
+                  <strong>Сервис базы знаний</strong>
+                  <code>apps/api/app/modules/knowledge/service.py</code>
+                </div>
+              </div>
+            </section>
           )}
         </main>
       </div>
-
-      {isTaskModalOpen && (
-        <div className="modal-overlay" onClick={closeTaskModal}>
-          <div className="details-modal" onClick={(event) => event.stopPropagation()}>
-            <div className="modal-header">
-              <div>
-                <h3 className="modal-title">Create new task</h3>
-                <p className="modal-subtitle">
-                  Add a study task. It will appear in Dashboard and Tasks immediately.
-                </p>
-              </div>
-
-              <button className="modal-close-button" onClick={closeTaskModal}>✕</button>
-            </div>
-
-            <div className="task-form">
-              {taskFormError && <p className="form-error">{taskFormError}</p>}
-
-              <div className="form-group">
-                <label className="form-label">Task title</label>
-                <input
-                  className="form-input"
-                  type="text"
-                  placeholder="Например: закончить отчёт по базе данных"
-                  value={newTaskTitle}
-                  onChange={(event) => setNewTaskTitle(event.target.value)}
-                />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Subject / course</label>
-                <input
-                  className="form-input"
-                  type="text"
-                  placeholder="Например: Databases"
-                  value={newTaskCourse}
-                  onChange={(event) => setNewTaskCourse(event.target.value)}
-                />
-              </div>
-
-              <div className="form-row">
-                <div className="form-group">
-                  <label className="form-label">Day</label>
-                  <input
-                    className="form-input"
-                    type="date"
-                    value={newTaskDay}
-                    onChange={(event) => setNewTaskDay(event.target.value)}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Time</label>
-                  <input
-                    className="form-input"
-                    type="time"
-                    value={newTaskTime}
-                    onChange={(event) => setNewTaskTime(event.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div className="form-row">
-                <div className="form-group">
-                  <label className="form-label">Priority</label>
-                  <select
-                    className="form-input"
-                    value={newTaskPriority}
-                    onChange={(event) => setNewTaskPriority(event.target.value as TaskPriority)}
-                  >
-                    <option value="High">High</option>
-                    <option value="Medium">Medium</option>
-                    <option value="Low">Low</option>
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Custom tag</label>
-                  <input
-                    className="form-input"
-                    type="text"
-                    placeholder="Lab / Exam / Report"
-                    value={newTaskTag}
-                    onChange={(event) => setNewTaskTag(event.target.value)}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="modal-actions">
-              <button className="ghost-button" onClick={closeTaskModal}>
-                Cancel
-              </button>
-              <button className="primary-button" onClick={createTask}>
-                Create task
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {selectedDay && (
-        <div className="modal-overlay" onClick={closeDayDetails}>
-          <div className="details-modal" onClick={(event) => event.stopPropagation()}>
-            <div className="modal-header">
-              <div>
-                <h3 className="modal-title">
-                  {selectedDay.date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
-                </h3>
-                <p className="modal-subtitle">
-                  {selectedDay.inSemester
-                    ? selectedDay.cycleWeek
-                      ? `Semester day • cycle week ${selectedDay.cycleWeek}`
-                      : 'Semester off day'
-                    : 'Outside semester range'}
-                </p>
-              </div>
-
-              <button className="modal-close-button" onClick={closeDayDetails}>✕</button>
-            </div>
-
-            <div className="details-stack">
-              {!selectedDay.inSemester && (
-                <div className="details-card">
-                  <p className="details-title">Semester has not started yet</p>
-                  <p className="details-meta">Semester logic starts from 9 February 2026.</p>
-                </div>
-              )}
-
-              {selectedDay.inSemester && selectedDay.items.length === 0 && (
-                <div className="details-card">
-                  <p className="details-title">No scheduled classes</p>
-                  <p className="details-meta">This day is currently free in the 4-week cycle or falls on Sunday.</p>
-                </div>
-              )}
-
-              {selectedDay.items.map((item) => (
-                <div key={`${selectedDay.date.toISOString()}-${item.time}-${item.title}`} className="details-card">
-                  <p className="details-time">{item.time}</p>
-                  <p className="details-title">{item.title}</p>
-                  <p className="details-meta">
-                    Room: {item.room}
-                    {item.teacher ? ` • Teacher: ${item.teacher}` : ''}
-                    {` • Type: ${item.type}`}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {isImportModalOpen && (
-        <div className="modal-overlay" onClick={() => setIsImportModalOpen(false)}>
-          <div className="details-modal" onClick={(event) => event.stopPropagation()}>
-            <div className="modal-header">
-              <div>
-                <h3 className="modal-title">Import schedule</h3>
-                <p className="modal-subtitle">
-                  Upload a schedule file. Current frontend only stores the selected source label.
-                </p>
-              </div>
-
-              <button className="modal-close-button" onClick={() => setIsImportModalOpen(false)}>✕</button>
-            </div>
-
-            <div className="import-form">
-              <div className="form-group">
-                <label className="form-label">Choose schedule file</label>
-                <input className="form-input" type="file" accept=".xlsx,.xls,.csv" onChange={handleFileChange} />
-                <p className="import-status">Selected file: {selectedFileName}</p>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">How should the system read it?</label>
-                <div className="option-row">
-                  <button className={`option-button ${importMode === 'smart' ? 'active' : ''}`} onClick={() => setImportMode('smart')}>
-                    Smart import
-                  </button>
-                  <button className={`option-button ${importMode === 'classes' ? 'active' : ''}`} onClick={() => setImportMode('classes')}>
-                    Classes only
-                  </button>
-                  <button className={`option-button ${importMode === 'exams' ? 'active' : ''}`} onClick={() => setImportMode('exams')}>
-                    Exams only
-                  </button>
-                </div>
-              </div>
-
-              <div className="details-card">
-                <p className="details-title">Current stage</p>
-                <p className="details-meta">
-                  Later backend will parse the uploaded workbook and replace the semester template with real classes.
-                </p>
-              </div>
-            </div>
-
-            <div className="modal-actions">
-              <button className="ghost-button" onClick={() => setIsImportModalOpen(false)}>
-                Cancel
-              </button>
-              <button className="primary-button" onClick={applyImportPreview}>
-                Apply import source
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </>
+  );
+}
+
+type TaskFiltersProps = {
+  activeFilter: ActiveTaskFilter;
+  onChange: (filter: ActiveTaskFilter) => void;
+};
+
+function TaskFilters({ activeFilter, onChange }: TaskFiltersProps) {
+  const filters: Array<{ id: ActiveTaskFilter; label: string }> = [
+    { id: 'all', label: 'Все активные' },
+    { id: 'high', label: 'Высокий приоритет' },
+    { id: 'blocked', label: 'Заблокированные' },
+    { id: 'without_deadline', label: 'Без дедлайна' },
+  ];
+
+  return (
+    <div className="filters" style={{ marginBottom: 16 }}>
+      {filters.map((filter) => (
+        <button
+          key={filter.id}
+          className={activeFilter === filter.id ? 'button small active' : 'button small'}
+          onClick={() => onChange(filter.id)}
+        >
+          {filter.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+type HistoryFiltersProps = {
+  historyFilter: HistoryFilter;
+  onChange: (filter: HistoryFilter) => void;
+};
+
+function HistoryFilters({ historyFilter, onChange }: HistoryFiltersProps) {
+  const filters: Array<{ id: HistoryFilter; label: string }> = [
+    { id: 'all', label: 'Вся история' },
+    { id: 'completed', label: 'Выполненные' },
+    { id: 'cancelled', label: 'Удалённые' },
+  ];
+
+  return (
+    <div className="filters" style={{ marginBottom: 16 }}>
+      {filters.map((filter) => (
+        <button
+          key={filter.id}
+          className={historyFilter === filter.id ? 'button small active' : 'button small'}
+          onClick={() => onChange(filter.id)}
+        >
+          {filter.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+type TaskListProps = {
+  tasks: ApiTask[];
+  isLoading: boolean;
+  pinnedTaskIds: string[];
+  showDeleteButton?: boolean;
+  showPinButton?: boolean;
+  isHistory?: boolean;
+  onStatusChange: (taskId: string, status: ApiTaskStatus) => Promise<void>;
+  onCancelTask: (taskId: string) => Promise<void>;
+  onRestoreTask: (taskId: string) => Promise<void>;
+  onTogglePinned: (taskId: string) => void;
+};
+
+function TaskList({
+  tasks,
+  isLoading,
+  pinnedTaskIds,
+  showDeleteButton = false,
+  showPinButton = false,
+  isHistory = false,
+  onStatusChange,
+  onCancelTask,
+  onRestoreTask,
+  onTogglePinned,
+}: TaskListProps) {
+  if (isLoading) {
+    return <div className="empty">Загрузка задач из базы знаний...</div>;
+  }
+
+  if (tasks.length === 0) {
+    return <div className="empty">Нет задач для отображения.</div>;
+  }
+
+  return (
+    <div className="task-list">
+      {tasks.map((task) => {
+        const isPinned = pinnedTaskIds.includes(task.id);
+        const isCancelled = task.status === 'cancelled';
+        const isCompleted = task.status === 'completed';
+
+        return (
+          <article
+            key={task.id}
+            className={[
+              'task-card',
+              isPinned ? 'pinned' : '',
+              isCancelled ? 'cancelled' : '',
+              isCompleted ? 'completed' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+          >
+            {showPinButton && !isHistory && (
+              <button
+                className={isPinned ? 'pin-button active' : 'pin-button'}
+                title={isPinned ? 'Открепить задачу' : 'Закрепить задачу'}
+                onClick={() => onTogglePinned(task.id)}
+              >
+                ★
+              </button>
+            )}
+
+            <div className="task-card-header">
+              <div>
+                <h4 className="task-title">{task.title}</h4>
+                <p className="task-description">
+                  {task.description || 'Описание не указано.'}
+                </p>
+              </div>
+
+              <select
+                className="select status-select"
+                value={task.status}
+                onChange={(event) =>
+                  void onStatusChange(task.id, event.target.value as ApiTaskStatus)
+                }
+              >
+                {statusOptions.map((status) => (
+                  <option key={status} value={status}>
+                    {statusLabels[status]}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="badges">
+              {isPinned && <span className="badge pinned">Закреплена</span>}
+              <span className={task.priority === 1 ? 'badge high' : 'badge'}>
+                {getPriorityLabel(task.priority)}
+              </span>
+              <span className="badge">{task.estimated_minutes} мин.</span>
+              <span className="badge">Дедлайн: {formatDateTime(task.deadline)}</span>
+              <span className="badge">Область: {task.workspace_id}</span>
+              <span className="badge">Проект: {task.project_id || 'не указан'}</span>
+              <span
+                className={
+                  task.status === 'completed'
+                    ? 'badge success'
+                    : task.status === 'cancelled'
+                      ? 'badge cancelled'
+                      : 'badge'
+                }
+              >
+                {statusLabels[task.status]}
+              </span>
+              {task.depends_on.length > 0 && (
+                <span className="badge">Зависимостей: {task.depends_on.length}</span>
+              )}
+            </div>
+
+            <div className="task-actions">
+              {showDeleteButton && !isHistory && task.status !== 'cancelled' && (
+                <button className="button danger small" onClick={() => void onCancelTask(task.id)}>
+                  Удалить
+                </button>
+              )}
+
+              {isHistory && task.status === 'cancelled' && (
+                <button className="button success small" onClick={() => void onRestoreTask(task.id)}>
+                  Восстановить
+                </button>
+              )}
+            </div>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+type EventListProps = {
+  events: ApiEvent[];
+  isLoading: boolean;
+};
+
+function EventList({ events, isLoading }: EventListProps) {
+  if (isLoading) {
+    return <div className="empty">Загрузка событий из базы знаний...</div>;
+  }
+
+  if (events.length === 0) {
+    return <div className="empty">Пока нет событий.</div>;
+  }
+
+  return (
+    <div className="event-list">
+      {events.map((event) => (
+        <article key={event.id} className="event-card">
+          <div>
+            <h4 className="event-title">{event.title}</h4>
+            <p className="event-description">
+              Событие занимает временной интервал и хранится как факт базы знаний.
+            </p>
+          </div>
+
+          <div className="badges">
+            <span className="badge">Начало: {formatDateTime(event.start_at)}</span>
+            <span className="badge">Конец: {formatDateTime(event.end_at)}</span>
+            <span className="badge">Источник: {event.source}</span>
+          </div>
+        </article>
+      ))}
+    </div>
   );
 }
 
