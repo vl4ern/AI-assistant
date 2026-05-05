@@ -45,6 +45,24 @@ AI-assistant/
 
 Подробно: `docs/team-workflow.md`.
 
+
+## Важно по запуску исправленной версии
+
+Подробная инструкция лежит в файле `RUN_FIXED_PROJECT.md`.
+
+Коротко:
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Открыть:
+
+- Frontend: `http://localhost:5173`
+- API docs: `http://localhost:8000/docs`
+- Health-check: `http://localhost:8000/health`
+
 ## Быстрый запуск (локально)
 
 1. Перейти в проект:

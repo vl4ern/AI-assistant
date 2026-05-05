@@ -11,18 +11,25 @@ from app.modules.intelligence.service import SchedulerService
 from app.modules.knowledge.models import EventCreate, TaskCreate
 from app.modules.knowledge.in_memory_repository import InMemoryKnowledgeRepository
 from app.modules.knowledge.postgres_repository import PostgresKnowledgeRepository
-import psycopg
+
+try:
+    import psycopg
+except ImportError:  # pragma: no cover - local fallback when psycopg is not installed
+    psycopg = None
 
 
 class Container:
     def __init__(self) -> None:
         try:
+            if psycopg is None:
+                raise RuntimeError("psycopg is not installed")
             self.knowledge_repository = PostgresKnowledgeRepository(
                 settings.database_url,
                 auto_init_schema=settings.postgres_auto_init_schema,
             )
-        except psycopg.OperationalError:
-            # Fallback for local development when PostgreSQL is not running.
+        except (RuntimeError, psycopg.OperationalError if psycopg is not None else Exception):
+            # Fallback for local development when PostgreSQL is not running
+            # or when psycopg is not installed.
             self.knowledge_repository = InMemoryKnowledgeRepository()
 
         self.scheduler = GreedyScheduler(

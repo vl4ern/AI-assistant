@@ -21,6 +21,8 @@ class TaskBase(BaseModel):
     depends_on: list[str] = Field(default_factory=list)
     allow_split: bool = False
     min_chunk_minutes: int | None = Field(default=None, ge=15, le=24 * 60)
+    scheduled_start: datetime | None = None
+    scheduled_end: datetime | None = None
 
 
 class TaskCreate(TaskBase):
@@ -32,8 +34,6 @@ class Task(TaskBase):
     status: TaskStatus = "todo"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    scheduled_start: datetime | None = None
-    scheduled_end: datetime | None = None
 
 
 class TaskStatusUpdate(BaseModel):

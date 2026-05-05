@@ -351,7 +351,7 @@ function mapApiTaskToUiTask(task: ApiTask): Task {
 function App() {
   const [activePage, setActivePage] = useState<Page>('dashboard');
   const [searchValue, setSearchValue] = useState('');
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [isTasksLoading, setIsTasksLoading] = useState(false);
   const [tasksError, setTasksError] = useState('');
   const [currentMonthIndex, setCurrentMonthIndex] = useState(0);

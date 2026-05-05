@@ -19,7 +19,7 @@ def test_build_working_windows_wake_end_24() -> None:
 
     assert len(windows) == 1
     assert windows[0][0] == start
-    assert windows[0][1] == datetime(2026, 5, 4, 0, 0, tzinfo=timezone.utc)  # конец дня бодрствования
+    assert windows[0][1] == end
 
 
 def test_build_working_windows_span_multiple_days() -> None:

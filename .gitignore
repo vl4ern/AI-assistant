@@ -32,3 +32,4 @@ apps/web/frontend/node_modules/
 
 GenerateFile.py
 all_code.txt
+.coverage
