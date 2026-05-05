@@ -8,13 +8,14 @@ from app.modules.integrations.service import IntegrationService
 from app.modules.intelligence.ml_scoring import MLScoringService
 from app.modules.intelligence.scheduler import GreedyScheduler
 from app.modules.intelligence.service import SchedulerService
-from app.modules.knowledge.models import EventCreate, TaskCreate
 from app.modules.knowledge.in_memory_repository import InMemoryKnowledgeRepository
+from app.modules.knowledge.models import EventCreate, TaskCreate
 from app.modules.knowledge.postgres_repository import PostgresKnowledgeRepository
+from app.modules.knowledge.service import KnowledgeService
 
 try:
     import psycopg
-except ImportError:  # pragma: no cover - local fallback when psycopg is not installed
+except ImportError:  # pragma: no cover
     psycopg = None
 
 
@@ -23,14 +24,18 @@ class Container:
         try:
             if psycopg is None:
                 raise RuntimeError("psycopg is not installed")
+
             self.knowledge_repository = PostgresKnowledgeRepository(
                 settings.database_url,
                 auto_init_schema=settings.postgres_auto_init_schema,
             )
         except (RuntimeError, psycopg.OperationalError if psycopg is not None else Exception):
-            # Fallback for local development when PostgreSQL is not running
-            # or when psycopg is not installed.
+            # Локальный fallback, если PostgreSQL недоступен.
             self.knowledge_repository = InMemoryKnowledgeRepository()
+
+        self.knowledge_service = KnowledgeService(
+            repository=self.knowledge_repository,
+        )
 
         self.scheduler = GreedyScheduler(
             slot_minutes=settings.schedule_slot_minutes,
@@ -60,12 +65,12 @@ class Container:
         self._seed_demo_data()
 
     def _seed_demo_data(self) -> None:
-        if self.knowledge_repository.list_tasks():
+        if self.knowledge_service.list_tasks():
             return
 
         now = datetime.now(timezone.utc)
 
-        self.knowledge_repository.create_event(
+        self.knowledge_service.create_event(
             EventCreate(
                 title="Лекции",
                 start_at=now.replace(hour=10, minute=0, second=0, microsecond=0),
@@ -74,7 +79,7 @@ class Container:
             )
         )
 
-        self.knowledge_repository.create_task(
+        self.knowledge_service.create_task(
             TaskCreate(
                 title="Лаба по ООП",
                 description="Сделать и загрузить первую лабораторную",
@@ -86,7 +91,7 @@ class Container:
             )
         )
 
-        self.knowledge_repository.create_task(
+        self.knowledge_service.create_task(
             TaskCreate(
                 title="Подготовка к тесту по матану",
                 estimated_minutes=90,
