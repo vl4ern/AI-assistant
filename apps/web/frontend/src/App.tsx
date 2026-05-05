@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
 
 import { createTask as createTaskApi, getTasks, updateTaskStatus } from './api/tasks';
 import type { ApiTask, ApiTaskCreate } from './types/api';
+import { KnowledgeBasePanel } from './components/KnowledgeBasePanel';
 
 type Page = 'dashboard' | 'tasks' | 'calendar' | 'projects' | 'analytics' | 'settings';
 type TaskPriority = 'High' | 'Medium' | 'Low';
@@ -817,6 +818,15 @@ function App() {
         </aside>
 
         <main className="page">
+        {activePage === 'dashboard' && (
+          <KnowledgeBasePanel
+            totalTasks={tasks.length}
+            activeTasks={activeTasksCount}
+            completedTasks={completedTasksCount}
+            highPriorityTasks={highPriorityCount}
+          />
+        )}
+
           <header className="topbar">
             <input
               className="search-input"
