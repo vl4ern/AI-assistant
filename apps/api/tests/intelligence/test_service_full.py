@@ -33,23 +33,22 @@ def test_today_when_no_tasks() -> None:
 def test_today_sorts_by_start() -> None:
     now = datetime.now(timezone.utc)
     repo = InMemoryKnowledgeRepository()
-    repo.create_task(
-        TaskCreate(title="Later", workspace_id="study",
-                   scheduled_start=now + timedelta(hours=2),
-                   scheduled_end=now + timedelta(hours=3))
+    
+    t1 = repo.create_task(
+        TaskCreate(title="Later", workspace_id="study")
     )
-    repo.create_task(
-        TaskCreate(title="Earlier", workspace_id="study",
-                   scheduled_start=now + timedelta(hours=1),
-                   scheduled_end=now + timedelta(hours=2))
+    t2 = repo.create_task(
+        TaskCreate(title="Earlier", workspace_id="study")
     )
+    repo.update_task_schedule(t1.id, now + timedelta(hours=2), now + timedelta(hours=3))
+    repo.update_task_schedule(t2.id, now + timedelta(hours=1), now + timedelta(hours=2))
+    
     scheduler = GreedyScheduler(slot_minutes=30, horizon_days=1, wake_start_hour=8, wake_end_hour=22)
     scoring = MLScoringService(wake_start_hour=8, wake_end_hour=22, horizon_days=7)
     service = SchedulerService(repo, scheduler, scoring)
     today = service.today()
     titles = [task.title for task in today.tasks]
     assert titles == ["Earlier", "Later"]
-
 
 def test_on_task_status_updated_ignores_non_completed() -> None:
     repo = InMemoryKnowledgeRepository()
