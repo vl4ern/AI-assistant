@@ -29,6 +29,35 @@ type ApiEventCreate = {
   source: string;
 };
 
+type IntegrationSyncResult = {
+  provider: string;
+  synced_items: number;
+  status: string;
+  message: string;
+};
+
+type ScheduleSlot = {
+  task_id: string;
+  title: string;
+  start_at: string;
+  end_at: string;
+  score: number;
+};
+
+type SchedulePlan = {
+  generated_at: string;
+  slots: ScheduleSlot[];
+  unscheduled_task_ids: string[];
+  prime_task_id: string | null;
+};
+
+type TodayView = {
+  date: string;
+  prime_task_id: string | null;
+  tasks: ApiTask[];
+  schedule_dirty: boolean;
+};
+
 type TaskForm = {
   title: string;
   description: string;
@@ -107,6 +136,26 @@ function createEvent(payload: ApiEventCreate): Promise<ApiEvent> {
   return apiRequest<ApiEvent>('/v1/events', {
     method: 'POST',
     body: JSON.stringify(payload),
+  });
+}
+
+function getIntegrations(): Promise<string[]> {
+  return apiRequest<string[]>('/v1/integrations');
+}
+
+function syncIntegration(providerName: string): Promise<IntegrationSyncResult> {
+  return apiRequest<IntegrationSyncResult>(`/v1/integrations/${providerName}/sync`, {
+    method: 'POST',
+  });
+}
+
+function getTodaySchedule(): Promise<TodayView> {
+  return apiRequest<TodayView>('/v1/schedule/today');
+}
+
+function rebuildSchedule(): Promise<SchedulePlan> {
+  return apiRequest<SchedulePlan>('/v1/schedule/rebuild', {
+    method: 'POST',
   });
 }
 
@@ -227,6 +276,10 @@ function App() {
   const [activePage, setActivePage] = useState<Page>('dashboard');
   const [tasks, setTasks] = useState<ApiTask[]>([]);
   const [events, setEvents] = useState<ApiEvent[]>([]);
+  const [integrations, setIntegrations] = useState<string[]>([]);
+  const [integrationResults, setIntegrationResults] = useState<Record<string, IntegrationSyncResult>>({});
+  const [todayView, setTodayView] = useState<TodayView | null>(null);
+  const [schedulePlan, setSchedulePlan] = useState<SchedulePlan | null>(null);
   const [pinnedTaskIds, setPinnedTaskIds] = useState<string[]>(() => loadPinnedTaskIds());
   const [activeFilter, setActiveFilter] = useState<ActiveTaskFilter>('all');
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all');
@@ -234,6 +287,9 @@ function App() {
   const [taskToDelete, setTaskToDelete] = useState<ApiTask | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isEventsLoading, setIsEventsLoading] = useState(false);
+  const [isIntegrationsLoading, setIsIntegrationsLoading] = useState(false);
+  const [syncingProvider, setSyncingProvider] = useState<string | null>(null);
+  const [isScheduleLoading, setIsScheduleLoading] = useState(false);
   const [isSavingTask, setIsSavingTask] = useState(false);
   const [isCreatingEvent, setIsCreatingEvent] = useState(false);
   const [message, setMessage] = useState('');
@@ -343,8 +399,75 @@ function App() {
     }
   }
 
+  async function loadIntegrations(): Promise<void> {
+    try {
+      setIsIntegrationsLoading(true);
+      setError('');
+
+      const loadedIntegrations = await getIntegrations();
+      setIntegrations(loadedIntegrations);
+    } catch (loadError) {
+      setError(`Не удалось загрузить интеграции: ${getErrorMessage(loadError)}`);
+    } finally {
+      setIsIntegrationsLoading(false);
+    }
+  }
+
+  async function handleSyncIntegration(providerName: string): Promise<void> {
+    try {
+      setSyncingProvider(providerName);
+      setError('');
+      setMessage('');
+
+      const result = await syncIntegration(providerName);
+
+      setIntegrationResults((currentResults) => ({
+        ...currentResults,
+        [providerName]: result,
+      }));
+      setMessage(`Синхронизация провайдера ${providerName} завершена.`);
+    } catch (syncError) {
+      setError(`Не удалось синхронизировать провайдер: ${getErrorMessage(syncError)}`);
+    } finally {
+      setSyncingProvider(null);
+    }
+  }
+
+  async function loadTodaySchedule(): Promise<void> {
+    try {
+      setIsScheduleLoading(true);
+      setError('');
+
+      const today = await getTodaySchedule();
+      setTodayView(today);
+    } catch (loadError) {
+      setError(`Не удалось получить план на сегодня: ${getErrorMessage(loadError)}`);
+    } finally {
+      setIsScheduleLoading(false);
+    }
+  }
+
+  async function handleRebuildSchedule(): Promise<void> {
+    try {
+      setIsScheduleLoading(true);
+      setError('');
+      setMessage('');
+
+      const plan = await rebuildSchedule();
+      const today = await getTodaySchedule();
+
+      setSchedulePlan(plan);
+      setTodayView(today);
+      setMessage('Расписание перестроено интеллектуальным модулем.');
+    } catch (rebuildError) {
+      setError(`Не удалось перестроить расписание: ${getErrorMessage(rebuildError)}`);
+    } finally {
+      setIsScheduleLoading(false);
+    }
+  }
+
   async function loadKnowledgeBase(): Promise<void> {
-    await Promise.all([loadTasks(), loadEvents()]);
+    await Promise.all([loadTasks(), loadEvents(), loadIntegrations(), loadTodaySchedule()]);
   }
 
   useEffect(() => {
@@ -1093,6 +1216,51 @@ function App() {
           line-height: 1.55;
         }
 
+        .module-meta {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          margin-top: 14px;
+        }
+
+        .module-result {
+          margin-top: 14px;
+          padding: 14px;
+          border: 1px solid rgba(52, 211, 153, 0.24);
+          border-radius: 14px;
+          background: rgba(52, 211, 153, 0.08);
+        }
+
+        .module-result p {
+          margin: 0;
+          color: #bbf7d0;
+        }
+
+        .schedule-list {
+          display: grid;
+          gap: 10px;
+          margin-top: 14px;
+        }
+
+        .schedule-slot {
+          padding: 14px;
+          border: 1px solid var(--border);
+          border-radius: 14px;
+          background: rgba(255, 255, 255, 0.04);
+        }
+
+        .schedule-slot strong {
+          display: block;
+          margin-bottom: 6px;
+        }
+
+        .schedule-slot span {
+          display: block;
+          color: var(--muted);
+          font-size: 0.9rem;
+          line-height: 1.5;
+        }
+
         .doc-card strong {
           display: block;
           margin-bottom: 6px;
@@ -1628,31 +1796,70 @@ function App() {
             <section className="panel">
               <h3>Интеграционный модуль</h3>
               <p className="panel-description">
-                Модуль предназначен для подключения внешних источников данных.
+                Модуль подключает внешние источники данных к базе знаний. Сейчас
+                frontend получает список доступных провайдеров и может запускать их
+                синхронизацию через backend.
               </p>
 
+              <div className="actions" style={{ marginBottom: 16 }}>
+                <button className="button" onClick={() => void loadIntegrations()}>
+                  Обновить провайдеры
+                </button>
+              </div>
+
+              {isIntegrationsLoading && <div className="empty">Загрузка провайдеров...</div>}
+
+              {!isIntegrationsLoading && integrations.length === 0 && (
+                <div className="empty">Провайдеры интеграций пока не найдены.</div>
+              )}
+
               <div className="section-stack">
-                <div className="module-card">
-                  <h4>Расписание университета</h4>
-                  <p>
-                    В разработке. В будущем данные расписания смогут попадать в базу
-                    знаний как события Event.
-                  </p>
-                </div>
+                {integrations.map((providerName) => {
+                  const result = integrationResults[providerName];
+
+                  return (
+                    <div className="module-card" key={providerName}>
+                      <h4>{providerName}</h4>
+                      <p>
+                        Провайдер интеграционного слоя. Его можно синхронизировать,
+                        чтобы проверить работу модуля коллег через API.
+                      </p>
+
+                      <div className="module-meta">
+                        <span className="badge">Provider: {providerName}</span>
+                        <span className="badge">Endpoint: /v1/integrations/{providerName}/sync</span>
+                      </div>
+
+                      <div className="actions" style={{ marginTop: 14 }}>
+                        <button
+                          className="button primary"
+                          disabled={syncingProvider === providerName}
+                          onClick={() => void handleSyncIntegration(providerName)}
+                        >
+                          {syncingProvider === providerName
+                            ? 'Синхронизация...'
+                            : 'Синхронизировать'}
+                        </button>
+                      </div>
+
+                      {result && (
+                        <div className="module-result">
+                          <p>
+                            Статус: {result.status}. Импортировано элементов:{' '}
+                            {result.synced_items}. Сообщение: {result.message}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
 
                 <div className="module-card">
-                  <h4>Google Calendar</h4>
+                  <h4>Будущие источники</h4>
                   <p>
-                    В разработке. Календарные встречи можно будет использовать как
-                    занятые временные интервалы пользователя.
-                  </p>
-                </div>
-
-                <div className="module-card">
-                  <h4>Mock provider</h4>
-                  <p>
-                    Тестовый провайдер уже используется как архитектурная заготовка
-                    интеграционного слоя.
+                    Слой интеграций можно расширить провайдерами расписания университета,
+                    Google Calendar и других внешних сервисов. Такие данные будут
+                    попадать в базу знаний как события Event.
                   </p>
                 </div>
               </div>
@@ -1663,33 +1870,117 @@ function App() {
             <section className="panel">
               <h3>Интеллектуальный модуль</h3>
               <p className="panel-description">
-                Модуль предназначен для дальнейшего планирования задач, скоринга и
-                построения рекомендаций.
+                Модуль использует задачи и события базы знаний для построения расписания,
+                определения prime-задачи и дальнейшего скоринга.
               </p>
 
-              <div className="section-stack">
+              <div className="actions" style={{ marginBottom: 16 }}>
+                <button
+                  className="button"
+                  disabled={isScheduleLoading}
+                  onClick={() => void loadTodaySchedule()}
+                >
+                  Получить план на сегодня
+                </button>
+                <button
+                  className="button primary"
+                  disabled={isScheduleLoading}
+                  onClick={() => void handleRebuildSchedule()}
+                >
+                  Перестроить расписание
+                </button>
+              </div>
+
+              <div className="grid-two">
                 <div className="module-card">
-                  <h4>Планировщик</h4>
+                  <h4>План на сегодня</h4>
                   <p>
-                    В разработке. Использует задачи и события базы знаний для построения
-                    будущего расписания.
+                    Данные загружаются из endpoint GET /v1/schedule/today.
                   </p>
+
+                  {isScheduleLoading && <div className="empty">Загрузка расписания...</div>}
+
+                  {!isScheduleLoading && !todayView && (
+                    <div className="empty">План на сегодня ещё не загружен.</div>
+                  )}
+
+                  {todayView && (
+                    <>
+                      <div className="module-meta">
+                        <span className="badge">Дата: {todayView.date}</span>
+                        <span className="badge">
+                          Prime task: {todayView.prime_task_id || 'нет'}
+                        </span>
+                        <span className="badge">
+                          Schedule dirty: {todayView.schedule_dirty ? 'да' : 'нет'}
+                        </span>
+                      </div>
+
+                      <div className="schedule-list">
+                        {todayView.tasks.length === 0 && (
+                          <div className="empty">На сегодня задач не запланировано.</div>
+                        )}
+
+                        {todayView.tasks.map((task) => (
+                          <div className="schedule-slot" key={task.id}>
+                            <strong>{task.title}</strong>
+                            <span>Статус: {statusLabels[task.status]}</span>
+                            <span>
+                              Интервал: {formatDateTime(task.scheduled_start)} —{' '}
+                              {formatDateTime(task.scheduled_end)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 <div className="module-card">
-                  <h4>Скоринг задач</h4>
+                  <h4>Результат перестроения</h4>
                   <p>
-                    В разработке. Модуль оценивает важность задач с учётом дедлайна,
-                    приоритета и занятости пользователя.
+                    Данные появляются после POST /v1/schedule/rebuild.
                   </p>
-                </div>
 
-                <div className="module-card">
-                  <h4>Рекомендации</h4>
-                  <p>
-                    В разработке. На следующих этапах система сможет предлагать, какие
-                    задачи выполнять раньше.
-                  </p>
+                  {!schedulePlan && (
+                    <div className="empty">Расписание ещё не перестраивалось.</div>
+                  )}
+
+                  {schedulePlan && (
+                    <>
+                      <div className="module-meta">
+                        <span className="badge">
+                          Сгенерировано: {formatDateTime(schedulePlan.generated_at)}
+                        </span>
+                        <span className="badge">
+                          Слотов: {schedulePlan.slots.length}
+                        </span>
+                        <span className="badge">
+                          Prime task: {schedulePlan.prime_task_id || 'нет'}
+                        </span>
+                        <span className="badge">
+                          Не запланировано: {schedulePlan.unscheduled_task_ids.length}
+                        </span>
+                      </div>
+
+                      <div className="schedule-list">
+                        {schedulePlan.slots.length === 0 && (
+                          <div className="empty">Планировщик не создал слоты.</div>
+                        )}
+
+                        {schedulePlan.slots.map((slot) => (
+                          <div className="schedule-slot" key={`${slot.task_id}-${slot.start_at}`}>
+                            <strong>{slot.title}</strong>
+                            <span>
+                              Интервал: {formatDateTime(slot.start_at)} —{' '}
+                              {formatDateTime(slot.end_at)}
+                            </span>
+                            <span>Score: {slot.score.toFixed(2)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             </section>
