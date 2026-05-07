@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from threading import Lock
 
-from .models import Event, EventCreate, Task, TaskCreate, TaskStatus
+from .models import Event, EventCreate, Task, TaskCreate, TaskStatus, TaskUpdate
 from .repository import KnowledgeRepository
 
 
@@ -29,11 +29,49 @@ class InMemoryKnowledgeRepository(KnowledgeRepository):
             self._schedule_dirty = True
             return item
 
+    def update_task(self, task_id: str, payload: TaskUpdate) -> Task | None:
+        with self._lock:
+            current = self._tasks.get(task_id)
+
+            if current is None:
+                return None
+
+            data = current.model_dump()
+            data.update(payload.model_dump(exclude_unset=True))
+            data["id"] = current.id
+            data["status"] = current.status
+            data["created_at"] = current.created_at
+            data["updated_at"] = datetime.now(timezone.utc)
+
+            item = Task(**data)
+            self._tasks[task_id] = item
+            self._schedule_dirty = True
+            return item
+
+    def delete_task(self, task_id: str) -> bool:
+        with self._lock:
+            if task_id not in self._tasks:
+                return False
+
+            del self._tasks[task_id]
+
+            for item in self._tasks.values():
+                item.depends_on = [
+                    dependency_id
+                    for dependency_id in item.depends_on
+                    if dependency_id != task_id
+                ]
+
+            self._schedule_dirty = True
+            return True
+
     def update_task_status(self, task_id: str, status: TaskStatus) -> Task | None:
         with self._lock:
             item = self._tasks.get(task_id)
+
             if item is None:
                 return None
+
             item.status = status
             item.updated_at = datetime.now(timezone.utc)
             self._schedule_dirty = True
@@ -47,8 +85,10 @@ class InMemoryKnowledgeRepository(KnowledgeRepository):
     ) -> Task | None:
         with self._lock:
             item = self._tasks.get(task_id)
+
             if item is None:
                 return None
+
             item.scheduled_start = start_at
             item.scheduled_end = end_at
             item.updated_at = datetime.now(timezone.utc)

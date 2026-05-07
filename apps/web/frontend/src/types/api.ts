@@ -38,3 +38,17 @@ export type ApiTaskCreate = {
   allow_split?: boolean;
   min_chunk_minutes?: number | null;
 };
+
+export type ApiTaskUpdate = {
+  title?: string;
+  description?: string | null;
+  estimated_minutes?: number;
+  priority?: number;
+  deadline?: string | null;
+  workspace_id?: string;
+  project_id?: string | null;
+  auto_reschedule?: boolean;
+  depends_on?: string[];
+  allow_split?: boolean;
+  min_chunk_minutes?: number | null;
+};

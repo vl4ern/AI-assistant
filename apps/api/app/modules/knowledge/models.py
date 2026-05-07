@@ -29,6 +29,22 @@ class TaskCreate(TaskBase):
     pass
 
 
+class TaskUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = None
+    estimated_minutes: int | None = Field(default=None, ge=15, le=24 * 60)
+    priority: int | None = Field(default=None, ge=1, le=4)
+    deadline: datetime | None = None
+    workspace_id: str | None = None
+    project_id: str | None = None
+    auto_reschedule: bool | None = None
+    depends_on: list[str] | None = None
+    allow_split: bool | None = None
+    min_chunk_minutes: int | None = Field(default=None, ge=15, le=24 * 60)
+    scheduled_start: datetime | None = None
+    scheduled_end: datetime | None = None
+
+
 class Task(TaskBase):
     id: str = Field(default_factory=lambda: str(uuid4()))
     status: TaskStatus = "todo"

@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime
 
-from .models import Event, EventCreate, Task, TaskCreate, TaskStatus
+from .models import Event, EventCreate, Task, TaskCreate, TaskStatus, TaskUpdate
 
 
 class KnowledgeRepository(ABC):
@@ -17,6 +17,14 @@ class KnowledgeRepository(ABC):
 
     @abstractmethod
     def create_task(self, payload: TaskCreate) -> Task:
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_task(self, task_id: str, payload: TaskUpdate) -> Task | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete_task(self, task_id: str) -> bool:
         raise NotImplementedError
 
     @abstractmethod

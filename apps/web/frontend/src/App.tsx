@@ -1,10 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { apiRequest } from './api/client';
-import { createTask as createTaskApi, getTasks, updateTaskStatus } from './api/tasks';
-import type { ApiTask, ApiTaskCreate, ApiTaskStatus } from './types/api';
+import {
+  createTask as createTaskApi,
+  deleteTask as deleteTaskApi,
+  getTasks,
+  updateTask as updateTaskApi,
+  updateTaskStatus,
+} from './api/tasks';
+import type { ApiTask, ApiTaskCreate, ApiTaskStatus, ApiTaskUpdate } from './types/api';
 
-type Page = 'dashboard' | 'tasks' | 'history' | 'calendar' | 'docs';
+type Page = 'dashboard' | 'tasks' | 'history' | 'calendar' | 'integrations' | 'intelligence' | 'docs';
 type ActiveTaskFilter = 'all' | 'high' | 'blocked' | 'without_deadline';
 type HistoryFilter = 'all' | 'completed' | 'cancelled';
 
@@ -72,6 +78,8 @@ const navItems: Array<{ id: Page; label: string }> = [
   { id: 'tasks', label: 'Задачи' },
   { id: 'history', label: 'История' },
   { id: 'calendar', label: 'События' },
+  { id: 'integrations', label: 'Интеграции' },
+  { id: 'intelligence', label: 'Интеллект' },
   { id: 'docs', label: 'Документация' },
 ];
 
@@ -136,6 +144,29 @@ function buildDateTimeIso(date: string, time: string): string | null {
   return result.toISOString();
 }
 
+function splitDateTime(value: string | null): { date: string; time: string } {
+  if (!value) {
+    return { date: '', time: '' };
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return { date: '', time: '' };
+  }
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+
+  return {
+    date: `${year}-${month}-${day}`,
+    time: `${hours}:${minutes}`,
+  };
+}
+
 function getPriorityLabel(priority: number): string {
   if (priority === 1) {
     return 'Высокий';
@@ -158,6 +189,14 @@ function getErrorMessage(error: unknown): string {
   }
 
   return 'Неизвестная ошибка';
+}
+
+function isPastDateTime(value: string | null): boolean {
+  if (!value) {
+    return false;
+  }
+
+  return new Date(value).getTime() < Date.now();
 }
 
 function loadPinnedTaskIds(): string[] {
@@ -191,9 +230,11 @@ function App() {
   const [pinnedTaskIds, setPinnedTaskIds] = useState<string[]>(() => loadPinnedTaskIds());
   const [activeFilter, setActiveFilter] = useState<ActiveTaskFilter>('all');
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all');
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [taskToDelete, setTaskToDelete] = useState<ApiTask | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isEventsLoading, setIsEventsLoading] = useState(false);
-  const [isCreatingTask, setIsCreatingTask] = useState(false);
+  const [isSavingTask, setIsSavingTask] = useState(false);
   const [isCreatingEvent, setIsCreatingEvent] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -324,6 +365,29 @@ function App() {
     }));
   }
 
+  function resetTaskForm(): void {
+    setEditingTaskId(null);
+    setTaskForm(initialTaskForm);
+  }
+
+  function startEditTask(task: ApiTask): void {
+    const deadline = splitDateTime(task.deadline);
+
+    setEditingTaskId(task.id);
+    setTaskForm({
+      title: task.title,
+      description: task.description ?? '',
+      estimatedMinutes: String(task.estimated_minutes),
+      priority: String(task.priority),
+      deadlineDate: deadline.date,
+      deadlineTime: deadline.time,
+      workspaceId: task.workspace_id,
+      projectId: task.project_id ?? '',
+      dependsOnTaskId: task.depends_on[0] ?? '',
+    });
+    setActivePage('tasks');
+  }
+
   function togglePinnedTask(taskId: string): void {
     setPinnedTaskIds((currentIds) => {
       const nextIds = currentIds.includes(taskId)
@@ -335,12 +399,12 @@ function App() {
     });
   }
 
-  async function handleCreateTask(): Promise<void> {
+  function buildTaskPayload(): ApiTaskCreate | ApiTaskUpdate | null {
     const title = taskForm.title.trim();
 
     if (!title) {
       setError('Введите название задачи.');
-      return;
+      return null;
     }
 
     const estimatedMinutes = Number(taskForm.estimatedMinutes);
@@ -348,18 +412,32 @@ function App() {
 
     if (!Number.isFinite(estimatedMinutes) || estimatedMinutes < 15 || estimatedMinutes > 1440) {
       setError('Длительность задачи должна быть от 15 до 1440 минут.');
-      return;
+      return null;
     }
 
     if (!Number.isFinite(priority) || priority < 1 || priority > 4) {
       setError('Приоритет должен быть от 1 до 4.');
-      return;
+      return null;
     }
 
     const deadline = buildDateTimeIso(taskForm.deadlineDate, taskForm.deadlineTime);
-    const dependsOn = taskForm.dependsOnTaskId ? [taskForm.dependsOnTaskId] : [];
 
-    const payload: ApiTaskCreate = {
+    if ((taskForm.deadlineDate && !taskForm.deadlineTime) || (!taskForm.deadlineDate && taskForm.deadlineTime)) {
+      setError('Для дедлайна нужно указать и дату, и время.');
+      return null;
+    }
+
+    if (isPastDateTime(deadline)) {
+      setError('Дедлайн не может быть в прошлом.');
+      return null;
+    }
+
+    if (editingTaskId && taskForm.dependsOnTaskId === editingTaskId) {
+      setError('Задача не может зависеть сама от себя.');
+      return null;
+    }
+
+    return {
       title,
       description: taskForm.description.trim() || null,
       estimated_minutes: estimatedMinutes,
@@ -368,26 +446,44 @@ function App() {
       workspace_id: taskForm.workspaceId.trim() || 'study',
       project_id: taskForm.projectId.trim() || null,
       auto_reschedule: true,
-      depends_on: dependsOn,
+      depends_on: taskForm.dependsOnTaskId ? [taskForm.dependsOnTaskId] : [],
       allow_split: false,
       min_chunk_minutes: null,
     };
+  }
+
+  async function handleSaveTask(): Promise<void> {
+    const payload = buildTaskPayload();
+
+    if (!payload) {
+      return;
+    }
 
     try {
-      setIsCreatingTask(true);
+      setIsSavingTask(true);
       setError('');
       setMessage('');
 
-      const createdTask = await createTaskApi(payload);
+      if (editingTaskId) {
+        const updatedTask = await updateTaskApi(editingTaskId, payload);
 
-      setTasks((previousTasks) => [createdTask, ...previousTasks]);
-      setTaskForm(initialTaskForm);
-      setMessage('Задача добавлена в базу знаний.');
+        setTasks((previousTasks) =>
+          previousTasks.map((task) => (task.id === editingTaskId ? updatedTask : task))
+        );
+        setMessage('Задача обновлена.');
+      } else {
+        const createdTask = await createTaskApi(payload);
+
+        setTasks((previousTasks) => [createdTask, ...previousTasks]);
+        setMessage('Задача добавлена в базу знаний.');
+      }
+
+      resetTaskForm();
       setActivePage('tasks');
-    } catch (createError) {
-      setError(`Не удалось создать задачу: ${getErrorMessage(createError)}`);
+    } catch (saveError) {
+      setError(`Не удалось сохранить задачу: ${getErrorMessage(saveError)}`);
     } finally {
-      setIsCreatingTask(false);
+      setIsSavingTask(false);
     }
   }
 
@@ -404,6 +500,16 @@ function App() {
 
     if (!startAt || !endAt) {
       setError('Введите корректное время начала и окончания события.');
+      return;
+    }
+
+    if (isPastDateTime(startAt)) {
+      setError('Событие не может начинаться в прошлом.');
+      return;
+    }
+
+    if (new Date(endAt).getTime() <= new Date(startAt).getTime()) {
+      setError('Событие должно заканчиваться позже, чем начинается.');
       return;
     }
 
@@ -467,12 +573,51 @@ function App() {
     }
   }
 
-  async function handleCancelTask(taskId: string): Promise<void> {
+  async function handleSoftDeleteTask(taskId: string): Promise<void> {
     await handleStatusChange(taskId, 'cancelled');
   }
 
   async function handleRestoreTask(taskId: string): Promise<void> {
     await handleStatusChange(taskId, 'todo');
+  }
+
+  function openHardDeleteModal(task: ApiTask): void {
+    setTaskToDelete(task);
+  }
+
+  function closeHardDeleteModal(): void {
+    setTaskToDelete(null);
+  }
+
+  async function confirmHardDeleteTask(): Promise<void> {
+    if (!taskToDelete) {
+      return;
+    }
+
+    const taskId = taskToDelete.id;
+
+    try {
+      setError('');
+      setMessage('');
+
+      await deleteTaskApi(taskId);
+
+      setTasks((previousTasks) => previousTasks.filter((task) => task.id !== taskId));
+      setPinnedTaskIds((currentIds) => {
+        const nextIds = currentIds.filter((id) => id !== taskId);
+        savePinnedTaskIds(nextIds);
+        return nextIds;
+      });
+
+      if (editingTaskId === taskId) {
+        resetTaskForm();
+      }
+
+      setTaskToDelete(null);
+      setMessage('Задача полностью удалена из базы данных.');
+    } catch (deleteError) {
+      setError(`Не удалось полностью удалить задачу: ${getErrorMessage(deleteError)}`);
+    }
   }
 
   return (
@@ -487,7 +632,6 @@ function App() {
           --bg: #07111f;
           --sidebar: #081426;
           --panel: #111e35;
-          --panel-soft: #16243e;
           --border: rgba(255, 255, 255, 0.09);
           --text: #f8fafc;
           --muted: #9fb0c8;
@@ -495,6 +639,7 @@ function App() {
           --accent-soft: rgba(59, 130, 246, 0.16);
           --danger: #fb7185;
           --success: #34d399;
+          --warning: #fbbf24;
           --shadow: 0 22px 70px rgba(0, 0, 0, 0.28);
         }
 
@@ -852,18 +997,15 @@ function App() {
         }
 
         .task-card.pinned {
-          border-color: rgba(251, 191, 36, 0.42);
-          background:
-            linear-gradient(135deg, rgba(251, 191, 36, 0.08), rgba(255, 255, 255, 0.04));
+          border-color: rgba(251, 191, 36, 0.55);
         }
 
         .task-card.cancelled {
-          opacity: 0.62;
-          filter: grayscale(0.35);
+          border-color: rgba(251, 113, 133, 0.7);
         }
 
         .task-card.completed {
-          opacity: 0.78;
+          border-color: rgba(52, 211, 153, 0.7);
         }
 
         .task-card-header {
@@ -925,36 +1067,30 @@ function App() {
           min-width: 160px;
         }
 
-        .knowledge-table {
-          width: 100%;
-          border-collapse: collapse;
-          overflow: hidden;
-          border-radius: 16px;
-        }
-
-        .knowledge-table th,
-        .knowledge-table td {
-          padding: 13px 12px;
-          border-bottom: 1px solid var(--border);
-          text-align: left;
-        }
-
-        .knowledge-table th {
-          color: #bfdbfe;
-          font-weight: 700;
-          background: rgba(255, 255, 255, 0.04);
-        }
-
-        .knowledge-table td {
-          color: var(--muted);
-        }
-
         .empty {
           padding: 26px;
           border: 1px dashed var(--border);
           border-radius: 18px;
           color: var(--muted);
           text-align: center;
+        }
+
+        .module-card {
+          padding: 22px;
+          border: 1px solid var(--border);
+          border-radius: 20px;
+          background: rgba(255, 255, 255, 0.04);
+        }
+
+        .module-card h4 {
+          margin: 0 0 8px;
+          font-size: 1.15rem;
+        }
+
+        .module-card p {
+          margin: 0;
+          color: var(--muted);
+          line-height: 1.55;
         }
 
         .doc-card strong {
@@ -964,6 +1100,76 @@ function App() {
 
         .doc-card code {
           color: #bfdbfe;
+        }
+
+        .modal-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 100;
+          display: grid;
+          place-items: center;
+          padding: 24px;
+          background: rgba(2, 6, 23, 0.72);
+          backdrop-filter: blur(8px);
+        }
+
+        .modal {
+          width: min(520px, 100%);
+          border: 1px solid rgba(251, 113, 133, 0.32);
+          border-radius: 24px;
+          padding: 24px;
+          background:
+            linear-gradient(135deg, rgba(251, 113, 133, 0.14), rgba(17, 30, 53, 0.96)),
+            var(--panel);
+          box-shadow: var(--shadow);
+        }
+
+        .modal-icon {
+          width: 44px;
+          height: 44px;
+          display: grid;
+          place-items: center;
+          margin-bottom: 16px;
+          border-radius: 16px;
+          color: #fecdd3;
+          background: rgba(251, 113, 133, 0.16);
+          font-size: 1.35rem;
+        }
+
+        .modal h3 {
+          margin: 0 0 10px;
+          font-size: 1.45rem;
+        }
+
+        .modal p {
+          margin: 0;
+          color: var(--muted);
+          line-height: 1.6;
+        }
+
+        .modal-task {
+          margin: 18px 0;
+          padding: 14px 16px;
+          border: 1px solid rgba(255, 255, 255, 0.09);
+          border-radius: 16px;
+          background: rgba(255, 255, 255, 0.05);
+        }
+
+        .modal-task strong {
+          display: block;
+          margin-bottom: 4px;
+        }
+
+        .modal-task span {
+          color: var(--muted);
+          font-size: 0.9rem;
+        }
+
+        .modal-actions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          margin-top: 22px;
         }
 
         @media (max-width: 1200px) {
@@ -1007,10 +1213,10 @@ function App() {
           </nav>
 
           <div className="sidebar-note">
-            <strong>Мягкое удаление</strong>
+            <strong>Два типа удаления</strong>
             <p>
-              Удалённая задача не исчезает из базы. Она получает статус “Удалена”
-              и переносится в историю.
+              Мягкое удаление переносит задачу в историю. Полное удаление удаляет
+              задачу из PostgreSQL без возможности восстановления.
             </p>
           </div>
         </aside>
@@ -1043,7 +1249,7 @@ function App() {
                 <p>
                   Система хранит структурированные знания о задачах, событиях,
                   дедлайнах, приоритетах, статусах и зависимостях. Активные задачи
-                  отображаются отдельно, а выполненные и удалённые переносятся в историю.
+                  отображаются отдельно, а выполненные и мягко удалённые переносятся в историю.
                 </p>
 
                 <div className="stats-grid">
@@ -1073,6 +1279,7 @@ function App() {
                   <span className="fact">Priority</span>
                   <span className="fact">Status</span>
                   <span className="fact">Soft delete</span>
+                  <span className="fact">Hard delete</span>
                   <span className="fact">Pinned task</span>
                 </div>
               </section>
@@ -1092,72 +1299,37 @@ function App() {
                       showDeleteButton
                       showPinButton
                       onStatusChange={handleStatusChange}
-                      onCancelTask={handleCancelTask}
+                      onSoftDeleteTask={handleSoftDeleteTask}
+                      onHardDeleteTask={openHardDeleteModal}
                       onRestoreTask={handleRestoreTask}
+                      onEditTask={startEditTask}
                       onTogglePinned={togglePinnedTask}
                     />
                   </section>
                 )}
 
-                <div className="grid-two">
-                  <section className="panel">
-                    <h3>Активные задачи</h3>
-                    <p className="panel-description">
-                      Здесь показана текущая работа. Исторические задачи сюда не попадают.
-                    </p>
+                <section className="panel">
+                  <h3>Активные задачи</h3>
+                  <p className="panel-description">
+                    Здесь показана текущая работа. Исторические задачи сюда не попадают.
+                  </p>
 
-                    <TaskFilters activeFilter={activeFilter} onChange={setActiveFilter} />
+                  <TaskFilters activeFilter={activeFilter} onChange={setActiveFilter} />
 
-                    <TaskList
-                      tasks={regularActiveTasks.slice(0, 6)}
-                      isLoading={isLoading}
-                      pinnedTaskIds={pinnedTaskIds}
-                      showDeleteButton
-                      showPinButton
-                      onStatusChange={handleStatusChange}
-                      onCancelTask={handleCancelTask}
-                      onRestoreTask={handleRestoreTask}
-                      onTogglePinned={togglePinnedTask}
-                    />
-                  </section>
-
-                  <section className="panel">
-                    <h3>Состояние базы знаний</h3>
-                    <p className="panel-description">
-                      Эти признаки нужны для демонстрации, что система работает через
-                      backend, правила и долговременное хранилище.
-                    </p>
-
-                    <table className="knowledge-table">
-                      <tbody>
-                        <tr>
-                          <th>Можно планировать</th>
-                          <td>{schedulableTasks}</td>
-                        </tr>
-                        <tr>
-                          <th>Высокий приоритет</th>
-                          <td>{highPriorityTasks}</td>
-                        </tr>
-                        <tr>
-                          <th>Выполненные</th>
-                          <td>{completedTasks}</td>
-                        </tr>
-                        <tr>
-                          <th>Зависимости</th>
-                          <td>{dependenciesCount}</td>
-                        </tr>
-                        <tr>
-                          <th>Хранилище</th>
-                          <td>PostgreSQL</td>
-                        </tr>
-                        <tr>
-                          <th>Слой знаний</th>
-                          <td>KnowledgeService</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </section>
-                </div>
+                  <TaskList
+                    tasks={regularActiveTasks.slice(0, 6)}
+                    isLoading={isLoading}
+                    pinnedTaskIds={pinnedTaskIds}
+                    showDeleteButton
+                    showPinButton
+                    onStatusChange={handleStatusChange}
+                    onSoftDeleteTask={handleSoftDeleteTask}
+                    onHardDeleteTask={openHardDeleteModal}
+                    onRestoreTask={handleRestoreTask}
+                    onEditTask={startEditTask}
+                    onTogglePinned={togglePinnedTask}
+                  />
+                </section>
               </div>
             </>
           )}
@@ -1165,9 +1337,11 @@ function App() {
           {activePage === 'tasks' && (
             <div className="grid-two">
               <section className="panel">
-                <h3>Добавить задачу</h3>
+                <h3>{editingTaskId ? 'Редактировать задачу' : 'Добавить задачу'}</h3>
                 <p className="panel-description">
-                  Новая задача сохраняется как факт `Task` в базе знаний.
+                  {editingTaskId
+                    ? 'Изменения сохраняются через PUT /v1/tasks/{id}.'
+                    : 'Новая задача сохраняется как факт Task в базе знаний.'}
                 </p>
 
                 <div className="form-grid">
@@ -1268,22 +1442,36 @@ function App() {
                       }
                     >
                       <option value="">Нет зависимости</option>
-                      {activeTasksList.map((task) => (
-                        <option key={task.id} value={task.id}>
-                          {task.title}
-                        </option>
-                      ))}
+                      {activeTasksList
+                        .filter((task) => task.id !== editingTaskId)
+                        .map((task) => (
+                          <option key={task.id} value={task.id}>
+                            {task.title}
+                          </option>
+                        ))}
                     </select>
                   </div>
 
                   <div className="form-field full">
-                    <button
-                      className="button primary"
-                      disabled={isCreatingTask}
-                      onClick={() => void handleCreateTask()}
-                    >
-                      {isCreatingTask ? 'Сохранение...' : 'Сохранить в базу знаний'}
-                    </button>
+                    <div className="actions">
+                      <button
+                        className="button primary"
+                        disabled={isSavingTask}
+                        onClick={() => void handleSaveTask()}
+                      >
+                        {isSavingTask
+                          ? 'Сохранение...'
+                          : editingTaskId
+                            ? 'Сохранить изменения'
+                            : 'Сохранить в базу знаний'}
+                      </button>
+
+                      {editingTaskId && (
+                        <button className="button" onClick={resetTaskForm}>
+                          Отменить редактирование
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               </section>
@@ -1304,8 +1492,10 @@ function App() {
                   showDeleteButton
                   showPinButton
                   onStatusChange={handleStatusChange}
-                  onCancelTask={handleCancelTask}
+                  onSoftDeleteTask={handleSoftDeleteTask}
+                  onHardDeleteTask={openHardDeleteModal}
                   onRestoreTask={handleRestoreTask}
+                  onEditTask={startEditTask}
                   onTogglePinned={togglePinnedTask}
                 />
               </section>
@@ -1316,8 +1506,8 @@ function App() {
             <section className="panel">
               <h3>История задач</h3>
               <p className="panel-description">
-                Здесь отображаются выполненные и удалённые задачи. Удаление реализовано
-                мягко: задача получает статус “Удалена”, но остаётся в базе знаний.
+                Здесь отображаются выполненные и мягко удалённые задачи. Полностью
+                удалённые задачи из истории исчезают, потому что удаляются из PostgreSQL.
               </p>
 
               <HistoryFilters historyFilter={historyFilter} onChange={setHistoryFilter} />
@@ -1328,8 +1518,10 @@ function App() {
                 pinnedTaskIds={pinnedTaskIds}
                 isHistory
                 onStatusChange={handleStatusChange}
-                onCancelTask={handleCancelTask}
+                onSoftDeleteTask={handleSoftDeleteTask}
+                onHardDeleteTask={openHardDeleteModal}
                 onRestoreTask={handleRestoreTask}
+                onEditTask={startEditTask}
                 onTogglePinned={togglePinnedTask}
               />
             </section>
@@ -1340,7 +1532,7 @@ function App() {
               <section className="panel">
                 <h3>Добавить событие</h3>
                 <p className="panel-description">
-                  Событие сохраняется как факт `Event` и описывает занятый временной
+                  Событие сохраняется как факт Event и описывает занятый временной
                   интервал пользователя.
                 </p>
 
@@ -1424,12 +1616,83 @@ function App() {
               <section className="panel">
                 <h3>События базы знаний</h3>
                 <p className="panel-description">
-                  Список загружается из backend API `/v1/events`.
+                  Список загружается из backend API /v1/events.
                 </p>
 
                 <EventList events={events} isLoading={isEventsLoading} />
               </section>
             </div>
+          )}
+
+          {activePage === 'integrations' && (
+            <section className="panel">
+              <h3>Интеграционный модуль</h3>
+              <p className="panel-description">
+                Модуль предназначен для подключения внешних источников данных.
+              </p>
+
+              <div className="section-stack">
+                <div className="module-card">
+                  <h4>Расписание университета</h4>
+                  <p>
+                    В разработке. В будущем данные расписания смогут попадать в базу
+                    знаний как события Event.
+                  </p>
+                </div>
+
+                <div className="module-card">
+                  <h4>Google Calendar</h4>
+                  <p>
+                    В разработке. Календарные встречи можно будет использовать как
+                    занятые временные интервалы пользователя.
+                  </p>
+                </div>
+
+                <div className="module-card">
+                  <h4>Mock provider</h4>
+                  <p>
+                    Тестовый провайдер уже используется как архитектурная заготовка
+                    интеграционного слоя.
+                  </p>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {activePage === 'intelligence' && (
+            <section className="panel">
+              <h3>Интеллектуальный модуль</h3>
+              <p className="panel-description">
+                Модуль предназначен для дальнейшего планирования задач, скоринга и
+                построения рекомендаций.
+              </p>
+
+              <div className="section-stack">
+                <div className="module-card">
+                  <h4>Планировщик</h4>
+                  <p>
+                    В разработке. Использует задачи и события базы знаний для построения
+                    будущего расписания.
+                  </p>
+                </div>
+
+                <div className="module-card">
+                  <h4>Скоринг задач</h4>
+                  <p>
+                    В разработке. Модуль оценивает важность задач с учётом дедлайна,
+                    приоритета и занятости пользователя.
+                  </p>
+                </div>
+
+                <div className="module-card">
+                  <h4>Рекомендации</h4>
+                  <p>
+                    В разработке. На следующих этапах система сможет предлагать, какие
+                    задачи выполнять раньше.
+                  </p>
+                </div>
+              </div>
+            </section>
           )}
 
           {activePage === 'docs' && (
@@ -1463,9 +1726,59 @@ function App() {
               </div>
             </section>
           )}
+          {taskToDelete && (
+            <ConfirmDeleteModal
+              task={taskToDelete}
+              onCancel={closeHardDeleteModal}
+              onConfirm={() => void confirmHardDeleteTask()}
+            />
+          )}
         </main>
       </div>
     </>
+  );
+}
+
+type ConfirmDeleteModalProps = {
+  task: ApiTask;
+  onCancel: () => void;
+  onConfirm: () => void;
+};
+
+function ConfirmDeleteModal({ task, onCancel, onConfirm }: ConfirmDeleteModalProps) {
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onCancel}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-task-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="modal-icon">!</div>
+
+        <h3 id="delete-task-title">Полностью удалить задачу?</h3>
+
+        <p>
+          Задача будет удалена из базы данных PostgreSQL. Это действие нельзя
+          отменить, и восстановить задачу из истории уже не получится.
+        </p>
+
+        <div className="modal-task">
+          <strong>{task.title}</strong>
+          <span>{task.description || 'Описание не указано.'}</span>
+        </div>
+
+        <div className="modal-actions">
+          <button className="button" onClick={onCancel}>
+            Отмена
+          </button>
+          <button className="button danger" onClick={onConfirm}>
+            Удалить полностью
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1532,8 +1845,10 @@ type TaskListProps = {
   showPinButton?: boolean;
   isHistory?: boolean;
   onStatusChange: (taskId: string, status: ApiTaskStatus) => Promise<void>;
-  onCancelTask: (taskId: string) => Promise<void>;
+  onSoftDeleteTask: (taskId: string) => Promise<void>;
+  onHardDeleteTask: (task: ApiTask) => void;
   onRestoreTask: (taskId: string) => Promise<void>;
+  onEditTask: (task: ApiTask) => void;
   onTogglePinned: (taskId: string) => void;
 };
 
@@ -1545,8 +1860,10 @@ function TaskList({
   showPinButton = false,
   isHistory = false,
   onStatusChange,
-  onCancelTask,
+  onSoftDeleteTask,
+  onHardDeleteTask,
   onRestoreTask,
+  onEditTask,
   onTogglePinned,
 }: TaskListProps) {
   if (isLoading) {
@@ -1635,9 +1952,15 @@ function TaskList({
             </div>
 
             <div className="task-actions">
+              {!isHistory && task.status !== 'cancelled' && (
+                <button className="button small" onClick={() => onEditTask(task)}>
+                  Редактировать
+                </button>
+              )}
+
               {showDeleteButton && !isHistory && task.status !== 'cancelled' && (
-                <button className="button danger small" onClick={() => void onCancelTask(task.id)}>
-                  Удалить
+                <button className="button danger small" onClick={() => void onSoftDeleteTask(task.id)}>
+                  Удалить в историю
                 </button>
               )}
 
@@ -1646,6 +1969,10 @@ function TaskList({
                   Восстановить
                 </button>
               )}
+
+              <button className="button danger small" onClick={() => onHardDeleteTask(task)}>
+                Удалить полностью
+              </button>
             </div>
           </article>
         );

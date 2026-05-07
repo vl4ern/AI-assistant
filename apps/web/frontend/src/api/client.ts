@@ -13,7 +13,23 @@ export async function apiRequest<T>(
   });
 
   if (!response.ok) {
-    throw new Error(`API error: ${response.status}`);
+    let detail = `API error: ${response.status}`;
+
+    try {
+      const data = await response.json();
+
+      if (typeof data?.detail === 'string') {
+        detail = data.detail;
+      }
+    } catch {
+      // Ответ без JSON.
+    }
+
+    throw new Error(detail);
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
   }
 
   return response.json() as Promise<T>;
