@@ -10,10 +10,18 @@ from app.modules.intelligence.utils.time_utils import build_working_windows
 from sklearn.linear_model import SGDRegressor
 from sklearn.preprocessing import StandardScaler
 
+
 @dataclass
 class TrainingSample:
-    """Один обучающий пример для дообучения модели."""
-    features: list[float]
+    """
+    Один обучающий пример для дообучения модели.
+
+    Хранит исходные данные, а не готовые признаки, чтобы при каждом
+    пересчёте признаков учитывать актуальные веса рабочих областей.
+    """
+    task: Task
+    events: list[Event]
+    now: datetime
     target: float
     source: str
     task_id: str
@@ -25,12 +33,21 @@ class MLScoringService:
 
     Модель сразу готова к работе благодаря стартовой калибровке на синтетических данных,
     сгенерированных по эвристической формуле. В процессе эксплуатации модель дообучается
-    на реальных действиях пользователя (перемещение задач в списке, завершение задач).
+    на реальных действиях пользователя (завершение задач).
+
+    Признаки модели (5):
+    - свободные минуты до дедлайна (с учётом событий и времени бодрствования);
+    - приоритет задачи (1-4);
+    - оценка времени выполнения (минуты);
+    - длина описания (символы) – чем длиннее описание, тем задача может быть сложнее/важнее;
+    - вес рабочей области (workspace) – динамический показатель, обучаемый на основе
+      обратной связи пользователя (0 для новых областей, средний целевой скор – для известных).
 
     Основные методы:
     - build_score_map() – формирует словарь {task_id: score} с учётом зависимостей.
-    - record_reorder_feedback() / record_completed_feedback() – накапливают данные для
-      онлайн-обучения (partial_fit).
+    - record_completed_feedback() – накапливает обучающие примеры для онлайн-обучения
+      с адаптивным целевым скором (ориентация на топ-задачу и бонус за просрочку).
+    - record_reorder_feedback() – альтернативный канал обратной связи (оставлен для совместимости).
     """
 
     def __init__(
@@ -39,7 +56,7 @@ class MLScoringService:
         wake_end_hour: int,
         horizon_days: int,
         retrain_batch_size: int = 20,
-        overdue_bonus: float = 10.0,
+        overdue_bonus: float = 7.0,
     ) -> None:
         """
         Инициализирует сервис.
@@ -49,7 +66,8 @@ class MLScoringService:
             wake_end_hour: час окончания бодрствования (24 – если до полуночи).
             horizon_days: горизонт планирования в днях (для задач без дедлайна).
             retrain_batch_size: размер пакета, при котором выполняется частичное обучение.
-            overdue_bonus: бонус к скору просроченной задачи при записи completed-фидбека.
+            overdue_bonus: базовый бонус к скору просроченной задачи (может увеличиваться
+                           фактической длительностью опоздания).
         """
         self.wake_start_hour = wake_start_hour
         self.wake_end_hour = wake_end_hour
@@ -64,8 +82,12 @@ class MLScoringService:
             random_state=42,
             max_iter=2000,
             tol=1e-3,
-            learning_rate="optimal",
+            learning_rate="optimal"
         )
+
+        # Накопление статистики по весам рабочих областей
+        self._ws_sum: dict[str, float] = {}
+        self._ws_count: dict[str, int] = {}
 
         self._pending_samples: list[TrainingSample] = []
         self.last_scores: dict[str, float] = {}
@@ -103,7 +125,8 @@ class MLScoringService:
         """
         Возвращает скор одной задачи, предсказанный ML-моделью.
 
-        Признаки: [свободные минуты до дедлайна, приоритет, оценка времени].
+        Признаки: [свободные минуты до дедлайна, приоритет, оценка времени,
+                   длина описания, вес рабочей области].
         """
         features = self._task_features(task=task, events=events, now=now)
         return float(self._model.predict([features])[0])
@@ -134,17 +157,39 @@ class MLScoringService:
         events: list[Event],
         now: datetime,
         base_score: float,
+        max_active_score: float | None = None,
     ) -> bool:
         """
         Регистрирует обучающий пример по факту завершения задачи.
 
-        Если задача просрочена, к целевому скору добавляется overdue_bonus.
+        Целевой скор адаптируется с учётом текущего лидера среди активных задач
+        и степени просрочки:
+
+        - Если задача просрочена, то target = max(max_active_score, base_score) + overdue_bonus,
+          где overdue_bonus может быть увеличен пропорционально количеству дней просрочки.
+        - Если не просрочена и есть более приоритетная задача (max_active_score > base_score),
+          target = max_active_score + 0.5 * (max_active_score - base_score)
+          (завершённая задача должна была быть не хуже лидера с небольшим бонусом).
+        - Иначе target = base_score (задача уже имела высший скор).
+
         Возвращает True, если был выполнен partial_fit.
         """
+        
+        now_utc = self._to_utc(now)
         target = base_score
+
         deadline = task.deadline
-        if deadline and self._to_utc(now) > self._to_utc(deadline):
-            target += self.overdue_bonus
+        overdue = deadline and self._to_utc(deadline) < now_utc
+        days_late = 0.0
+        if overdue:
+            delta = now_utc - self._to_utc(deadline)
+            days_late = delta.total_seconds() / 86400.0
+            # Увеличиваем бонус за просрочку в зависимости от длительности опоздания
+            dynamic_bonus = self.overdue_bonus * (1.0 + days_late)
+            target += dynamic_bonus
+        elif max_active_score:
+            leader = max(max_active_score, base_score)
+            target = leader + 0.5 * (leader - base_score)
 
         return self._record_sample(
             task=task,
@@ -163,14 +208,24 @@ class MLScoringService:
         source: str,
     ) -> bool:
         """
-        Добавляет TrainingSample в очередь ожидания и при необходимости запускает partial_fit.
+        Добавляет обучающий пример в очередь и при необходимости дообучает модель.
 
-        Возвращает True, если модель была дообучена (размер очереди достиг retrain_batch_size).
+        Обновляет статистику рабочей области на основе целевого скора, затем сохраняет
+        TrainingSample с исходными данными. При накоплении retrain_batch_size примеров
+        пересчитывает признаки с актуальными весами и выполняет partial_fit.
+
+        Возвращает True, если модель была дообучена.
         """
-        features = self._task_features(task=task, events=events, now=now)
+        # Обновляем вес рабочей области
+        ws = task.workspace_id
+        self._ws_sum[ws] = self._ws_sum.get(ws, 0.0) + target_score
+        self._ws_count[ws] = self._ws_count.get(ws, 0) + 1
+
         self._pending_samples.append(
             TrainingSample(
-                features=features,
+                task=task,
+                events=events,
+                now=now,
                 target=float(target_score),
                 source=source,
                 task_id=task.id,
@@ -180,24 +235,45 @@ class MLScoringService:
         if len(self._pending_samples) < self.retrain_batch_size:
             return False
 
-        features_batch = [sample.features for sample in self._pending_samples]
-        targets_batch = [sample.target for sample in self._pending_samples]
-
+        features_batch = [
+            self._task_features(s.task, s.events, s.now)
+            for s in self._pending_samples
+        ]
+        targets_batch = [s.target for s in self._pending_samples]
+        print ('\nЯ ОБУЧИЛСЯ\n')
         self._model.partial_fit(features_batch, targets_batch)
-
         self._pending_samples.clear()
         return True
+    
 
     def _task_features(self, task: Task, events: list[Event], now: datetime) -> list[float]:
         """
-        Формирует вектор признаков для задачи:
-        [free_minutes_to_deadline, user_priority, estimated_minutes].
+        Формирует вектор признаков для задачи из 5 элементов:
+        [free_minutes_to_deadline, user_priority, estimated_minutes,
+         description_length, workspace_weight].
+
+        Длина описания и вес рабочей области – дополнительные сигналы,
+        повышающие качество планирования.
         """
         free_minutes = self._time_to_deadline_free_minutes(task=task, events=events, now=now)
         user_priority = float(task.priority)
         estimate_minutes = float(task.estimated_minutes)
-        raw = [[free_minutes, user_priority, estimate_minutes]]
+        desc_len = float(len(task.description or ""))
+        ws_weight = self._get_workspace_weight(task.workspace_id)
+
+        raw = [[free_minutes, user_priority, estimate_minutes, desc_len, ws_weight]]
         return list(self._scaler.transform(raw)[0])
+
+    def _get_workspace_weight(self, workspace_id: str) -> float:
+        """
+        Возвращает текущий вес рабочей области как среднее целевых скоров
+        по всем записанным примерам обратной связи для этой области.
+        Для неизвестной области возвращает 0.
+        """
+        cnt = self._ws_count.get(workspace_id, 0)
+        if cnt == 0:
+            return 0.0
+        return self._ws_sum[workspace_id] / cnt
 
     def _time_to_deadline_free_minutes(self, task: Task, events: list[Event], now: datetime) -> float:
         """
@@ -219,7 +295,6 @@ class MLScoringService:
         busy_minutes = self._events_overlap_minutes(windows=awake_windows, events=events)
 
         return max(0.0, awake_minutes - busy_minutes)
-
 
     def _events_overlap_minutes(
         self,
@@ -291,8 +366,10 @@ class MLScoringService:
         """
         Начальное обучение модели на синтетическом датасете.
 
-        Генерирует x примеров (комбинации free_minutes, priority, estimate) и вычисляет
-        целевой скор по формуле _initial_target. Затем выполняет fit модели.
+        Генерирует примеры с пятью признаками:
+        [free_minutes, priority, estimate_minutes, description_length, workspace_weight].
+        Длина описания варьируется синтетически (0, 50, 200, 500 символов),
+        вес рабочей области – 0 (на старте реальных данных нет).
         """
         bootstrap_features: list[list[float]] = []
         bootstrap_targets: list[float] = []
@@ -300,37 +377,53 @@ class MLScoringService:
         free_minutes_values = [30, 60, 180, 240, 720, 1440, 2880, 7200, 10000, 14400, 20000, 28800, 35000, 43200]
         priorities = [1, 2, 3, 4]
         estimates = [30, 60, 90, 120, 150, 180, 210, 240, 270, 300]
+        desc_lengths = [0, 50, 200, 500, 2000]
+        
+        # Добавим несколько значений workspace_weight, чтобы scaler их знал
+        ws_weights = [0.0, 50.0, 200.0, 800.0, 2000.0]
+
 
         for free_minutes in free_minutes_values:
             for priority in priorities:
                 for estimate in estimates:
-                    bootstrap_features.append([float(free_minutes), float(priority), float(estimate)])
-                    bootstrap_targets.append(
-                        self._initial_target(
-                            free_minutes=float(free_minutes),
-                            priority=float(priority),
-                            estimated_minutes=float(estimate),
-                        )
-                    )
+                    for desc_len in desc_lengths:
+                        for ws_w in ws_weights:
+                            bootstrap_features.append([
+                                float(free_minutes),
+                                float(priority),
+                                float(estimate),
+                                float(desc_len),
+                                ws_w
+                            ])
+                            bootstrap_targets.append(
+                                self._initial_target(
+                                    free_minutes=float(free_minutes),
+                                    priority=float(priority),
+                                    estimated_minutes=float(estimate),
+                                    description_length=float(desc_len),
+                                )
+                            )
 
-        # Масштабируем признаки
         self._scaler.fit(bootstrap_features)
         X_scaled = self._scaler.transform(bootstrap_features)
-
         self._model.fit(X_scaled, bootstrap_targets)
-        
 
     @staticmethod
     def _initial_target(
         free_minutes: float,
         priority: float,
         estimated_minutes: float,
+        description_length: float = 0.0,
     ) -> float:
         """
         Начальная формула "здравого смысла":
         - чем меньше свободного времени до дедлайна, тем выше score;
         - чем "важнее" задача для пользователя (priority=1), тем выше score;
-        - более длинные задачи немного повышаем, чтобы не откладывались бесконечно.
+        - более длинные задачи немного повышаем, чтобы не откладывались бесконечно;
+        - бонус за объём описания (0.01 * длина_в_символах) – эвристика «подробнее → сложнее/важнее».
         """
-        raw = 1018.0 - (0.006 * free_minutes) - (18.0 * priority) + (0.05 * estimated_minutes)
+        raw = (1025.0 - 0.006 * free_minutes
+            - 25.0 * priority
+            + 0.05 * estimated_minutes
+            + 0.01 * description_length)
         return raw

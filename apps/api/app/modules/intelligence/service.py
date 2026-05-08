@@ -174,11 +174,23 @@ class SchedulerService:
         base_score = self.scoring_service.last_scores.get(task.id)
         if base_score is None:
             base_score = self.scoring_service.score_single_task(task, events=events, now=now)
+        
+        max_score = base_score
+        if self.scoring_service.last_scores:
+            tasks = self.repository.list_tasks()
+            task_by_id = {task.id: task for task in tasks}
+            
+            active_scores = [s for tid, s in self.scoring_service.last_scores.items()
+                             if task_by_id[tid].status not in ("cancelled", "completed")]
+
+            if active_scores:
+                max_score = max(active_scores)
 
         self.scoring_service.record_completed_feedback(
             task=task,
             events=events,
             now=now,
             base_score=float(base_score),
+            max_active_score=max_score
         )
         self._completed_markers[task.id] = marker
