@@ -284,7 +284,8 @@ function App() {
   const [activeFilter, setActiveFilter] = useState<ActiveTaskFilter>('all');
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all');
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
-  const [taskToDelete, setTaskToDelete] = useState<ApiTask | null>(null);
+  const [taskToDeleteOptions, setTaskToDeleteOptions] = useState<ApiTask | null>(null);
+  const [taskToConfirmHardDelete, setTaskToConfirmHardDelete] = useState<ApiTask | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isEventsLoading, setIsEventsLoading] = useState(false);
   const [isIntegrationsLoading, setIsIntegrationsLoading] = useState(false);
@@ -704,20 +705,44 @@ function App() {
     await handleStatusChange(taskId, 'todo');
   }
 
-  function openHardDeleteModal(task: ApiTask): void {
-    setTaskToDelete(task);
+  function openDeleteOptionsModal(task: ApiTask): void {
+    setTaskToDeleteOptions(task);
   }
 
-  function closeHardDeleteModal(): void {
-    setTaskToDelete(null);
+  function closeDeleteOptionsModal(): void {
+    setTaskToDeleteOptions(null);
   }
 
-  async function confirmHardDeleteTask(): Promise<void> {
-    if (!taskToDelete) {
+  async function softDeleteFromModal(): Promise<void> {
+    if (!taskToDeleteOptions) {
       return;
     }
 
-    const taskId = taskToDelete.id;
+    const taskId = taskToDeleteOptions.id;
+
+    setTaskToDeleteOptions(null);
+    await handleSoftDeleteTask(taskId);
+  }
+
+  function openHardDeleteConfirmModal(): void {
+    if (!taskToDeleteOptions) {
+      return;
+    }
+
+    setTaskToConfirmHardDelete(taskToDeleteOptions);
+    setTaskToDeleteOptions(null);
+  }
+
+  function closeHardDeleteConfirmModal(): void {
+    setTaskToConfirmHardDelete(null);
+  }
+
+  async function confirmHardDeleteTask(): Promise<void> {
+    if (!taskToConfirmHardDelete) {
+      return;
+    }
+
+    const taskId = taskToConfirmHardDelete.id;
 
     try {
       setError('');
@@ -736,7 +761,7 @@ function App() {
         resetTaskForm();
       }
 
-      setTaskToDelete(null);
+      setTaskToConfirmHardDelete(null);
       setMessage('Задача полностью удалена из базы данных.');
     } catch (deleteError) {
       setError(`Не удалось полностью удалить задачу: ${getErrorMessage(deleteError)}`);
@@ -1282,7 +1307,7 @@ function App() {
         }
 
         .modal {
-          width: min(520px, 100%);
+          width: min(560px, 100%);
           border: 1px solid rgba(251, 113, 133, 0.32);
           border-radius: 24px;
           padding: 24px;
@@ -1290,6 +1315,10 @@ function App() {
             linear-gradient(135deg, rgba(251, 113, 133, 0.14), rgba(17, 30, 53, 0.96)),
             var(--panel);
           box-shadow: var(--shadow);
+        }
+
+        .modal.modal-small {
+          width: min(460px, 100%);
         }
 
         .modal-icon {
@@ -1338,6 +1367,11 @@ function App() {
           justify-content: flex-end;
           gap: 10px;
           margin-top: 22px;
+        }
+
+        .modal-actions.split {
+          justify-content: space-between;
+          align-items: center;
         }
 
         @media (max-width: 1200px) {
@@ -1467,8 +1501,7 @@ function App() {
                       showDeleteButton
                       showPinButton
                       onStatusChange={handleStatusChange}
-                      onSoftDeleteTask={handleSoftDeleteTask}
-                      onHardDeleteTask={openHardDeleteModal}
+                      onOpenDeleteOptions={openDeleteOptionsModal}
                       onRestoreTask={handleRestoreTask}
                       onEditTask={startEditTask}
                       onTogglePinned={togglePinnedTask}
@@ -1491,8 +1524,7 @@ function App() {
                     showDeleteButton
                     showPinButton
                     onStatusChange={handleStatusChange}
-                    onSoftDeleteTask={handleSoftDeleteTask}
-                    onHardDeleteTask={openHardDeleteModal}
+                      onOpenDeleteOptions={openDeleteOptionsModal}
                     onRestoreTask={handleRestoreTask}
                     onEditTask={startEditTask}
                     onTogglePinned={togglePinnedTask}
@@ -1660,8 +1692,7 @@ function App() {
                   showDeleteButton
                   showPinButton
                   onStatusChange={handleStatusChange}
-                  onSoftDeleteTask={handleSoftDeleteTask}
-                  onHardDeleteTask={openHardDeleteModal}
+                  onOpenDeleteOptions={openDeleteOptionsModal}
                   onRestoreTask={handleRestoreTask}
                   onEditTask={startEditTask}
                   onTogglePinned={togglePinnedTask}
@@ -1687,7 +1718,7 @@ function App() {
                 isHistory
                 onStatusChange={handleStatusChange}
                 onSoftDeleteTask={handleSoftDeleteTask}
-                onHardDeleteTask={openHardDeleteModal}
+                onOpenDeleteOptions={openDeleteOptionsModal}
                 onRestoreTask={handleRestoreTask}
                 onEditTask={startEditTask}
                 onTogglePinned={togglePinnedTask}
@@ -2017,16 +2048,82 @@ function App() {
               </div>
             </section>
           )}
-          {taskToDelete && (
+          {taskToDeleteOptions && (
+            <DeleteOptionsModal
+              task={taskToDeleteOptions}
+              onCancel={closeDeleteOptionsModal}
+              onSoftDelete={() => void softDeleteFromModal()}
+              onHardDelete={openHardDeleteConfirmModal}
+            />
+          )}
+
+          {taskToConfirmHardDelete && (
             <ConfirmDeleteModal
-              task={taskToDelete}
-              onCancel={closeHardDeleteModal}
+              task={taskToConfirmHardDelete}
+              onCancel={closeHardDeleteConfirmModal}
               onConfirm={() => void confirmHardDeleteTask()}
             />
           )}
         </main>
       </div>
     </>
+  );
+}
+
+type DeleteOptionsModalProps = {
+  task: ApiTask;
+  onCancel: () => void;
+  onSoftDelete: () => void;
+  onHardDelete: () => void;
+};
+
+function DeleteOptionsModal({
+  task,
+  onCancel,
+  onSoftDelete,
+  onHardDelete,
+}: DeleteOptionsModalProps) {
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onCancel}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-options-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="modal-icon">×</div>
+
+        <h3 id="delete-options-title">Удаление задачи</h3>
+
+        <p>
+          Выберите способ удаления. Задачу можно перенести в историю или полностью
+          удалить из базы данных.
+        </p>
+
+        <div className="modal-task">
+          <strong>{task.title}</strong>
+          <span>{task.description || 'Описание не указано.'}</span>
+        </div>
+
+        <div className="modal-actions split">
+          <button className="button" onClick={onCancel}>
+            Отмена
+          </button>
+
+          <div className="actions">
+            {task.status !== 'cancelled' && (
+              <button className="button danger" onClick={onSoftDelete}>
+                Удалить в историю
+              </button>
+            )}
+            <button className="button danger" onClick={onHardDelete}>
+              Удалить из БД
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -2040,7 +2137,7 @@ function ConfirmDeleteModal({ task, onCancel, onConfirm }: ConfirmDeleteModalPro
   return (
     <div className="modal-backdrop" role="presentation" onClick={onCancel}>
       <div
-        className="modal"
+        className="modal modal-small"
         role="dialog"
         aria-modal="true"
         aria-labelledby="delete-task-title"
@@ -2136,8 +2233,7 @@ type TaskListProps = {
   showPinButton?: boolean;
   isHistory?: boolean;
   onStatusChange: (taskId: string, status: ApiTaskStatus) => Promise<void>;
-  onSoftDeleteTask: (taskId: string) => Promise<void>;
-  onHardDeleteTask: (task: ApiTask) => void;
+  onOpenDeleteOptions: (task: ApiTask) => void;
   onRestoreTask: (taskId: string) => Promise<void>;
   onEditTask: (task: ApiTask) => void;
   onTogglePinned: (taskId: string) => void;
@@ -2151,8 +2247,7 @@ function TaskList({
   showPinButton = false,
   isHistory = false,
   onStatusChange,
-  onSoftDeleteTask,
-  onHardDeleteTask,
+  onOpenDeleteOptions,
   onRestoreTask,
   onEditTask,
   onTogglePinned,
@@ -2250,8 +2345,8 @@ function TaskList({
               )}
 
               {showDeleteButton && !isHistory && task.status !== 'cancelled' && (
-                <button className="button danger small" onClick={() => void onSoftDeleteTask(task.id)}>
-                  Удалить в историю
+                <button className="button danger small" onClick={() => onOpenDeleteOptions(task)}>
+                  Удалить
                 </button>
               )}
 
@@ -2261,9 +2356,11 @@ function TaskList({
                 </button>
               )}
 
-              <button className="button danger small" onClick={() => onHardDeleteTask(task)}>
-                Удалить полностью
-              </button>
+              {isHistory && (
+                <button className="button danger small" onClick={() => onOpenDeleteOptions(task)}>
+                  Удалить
+                </button>
+              )}
             </div>
           </article>
         );
