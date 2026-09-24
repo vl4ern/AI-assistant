@@ -25,9 +25,9 @@ class SimpleLinearScorer:
     def predict(self, features: list[list[float]]) -> list[float]:
         return [
             MLScoringService._initial_target(
-                free_minutes=float(item[0]),
-                priority=float(item[1]),
-                estimated_minutes=float(item[2]),
+                free_minutes=float(item[0]) * 1440.0,
+                priority=float(item[1]) * 4.0,
+                estimated_minutes=float(item[2]) * 240.0,
             )
             for item in features
         ]
@@ -87,7 +87,8 @@ class MLScoringService:
                 random_state=42,
                 max_iter=2000,
                 tol=1e-3,
-                learning_rate="optimal",
+                learning_rate="invscaling",
+                eta0=0.01,
             )
         else:
             self._model = SimpleLinearScorer()
@@ -131,8 +132,9 @@ class MLScoringService:
         Признаки: [свободные минуты до дедлайна, приоритет, оценка времени].
         """
         features = self._task_features(task=task, events=events, now=now)
-        
-        return float(self._model.predict([features])[0])
+
+        raw_score = float(self._model.predict([features])[0])
+        return max(0.0, min(200.0, raw_score))
 
     def record_reorder_feedback(
         self,
@@ -222,7 +224,25 @@ class MLScoringService:
         free_minutes = self._time_to_deadline_free_minutes(task=task, events=events, now=now)
         user_priority = float(task.priority)
         estimate_minutes = float(task.estimated_minutes)
-        return [free_minutes, user_priority, estimate_minutes]
+        return self._scale_features(free_minutes, user_priority, estimate_minutes)
+
+    @staticmethod
+    def _scale_features(
+        free_minutes: float,
+        priority: float,
+        estimated_minutes: float,
+    ) -> list[float]:
+        """
+        Приводит признаки к сопоставимому масштабу.
+
+        Без нормализации SGDRegressor на признаке free_minutes
+        (десятки тысяч минут) даёт нестабильные предсказания.
+        """
+        return [
+            free_minutes / 1440.0,
+            priority / 4.0,
+            estimated_minutes / 240.0,
+        ]
 
     def _time_to_deadline_free_minutes(self, task: Task, events: list[Event], now: datetime) -> float:
         """
@@ -329,7 +349,13 @@ class MLScoringService:
         for free_minutes in free_minutes_values:
             for priority in priorities:
                 for estimate in estimates:
-                    bootstrap_features.append([float(free_minutes), float(priority), float(estimate)])
+                    bootstrap_features.append(
+                        self._scale_features(
+                            free_minutes=float(free_minutes),
+                            priority=float(priority),
+                            estimated_minutes=float(estimate),
+                        )
+                    )
                     bootstrap_targets.append(
                         self._initial_target(
                             free_minutes=float(free_minutes),

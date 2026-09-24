@@ -183,17 +183,30 @@ paths:
   /v1/integrations:
     get:
       tags: [integrations]
-      summary: List available providers
+      summary: List available adapters with sync status
       operationId: listIntegrations
       responses:
         "200":
-          description: Providers list
+          description: Adapters status list
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  type: string
+                  $ref: "#/components/schemas/IntegrationAdapterStatus"
+
+  /v1/integrations/sync:
+    post:
+      tags: [integrations]
+      summary: Sync all adapters
+      operationId: syncAllIntegrations
+      responses:
+        "200":
+          description: Sync result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntegrationSyncResult"
 
   /v1/integrations/{provider_name}/sync:
     post:
@@ -495,17 +508,40 @@ components:
       properties:
         provider:
           type: string
-        imported_items:
+        synced_items:
           type: integer
-        updated_items:
+        conflicts_detected:
           type: integer
-        warnings:
+        errors:
           type: array
           items:
             type: string
           default: []
+        status:
+          type: string
+        message:
+          type: string
       required:
         - provider
+
+    IntegrationAdapterStatus:
+      type: object
+      properties:
+        name:
+          type: string
+        source:
+          type: string
+        sync_interval_seconds:
+          type: integer
+        last_sync_at:
+          type: string
+          format: date-time
+          nullable: true
+        running:
+          type: boolean
+      required:
+        - name
+        - source
         - imported_items
         - updated_items
 

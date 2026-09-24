@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import os
+
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
+
+load_dotenv()
 
 
 class AppSettings(BaseModel):
@@ -31,6 +35,13 @@ class AppSettings(BaseModel):
         "yes",
         "on",
     }
+    iis_group_number: str = os.getenv("IIS_GROUP_NUMBER", "")
+    integration_cache_path: str = os.getenv("INTEGRATION_CACHE_PATH", "data/integration_cache.db")
+    google_credentials_file: str = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+    google_token_file: str = os.getenv("GOOGLE_TOKEN_FILE", "google_token.pickle")
+    integrations_background_sync_enabled: bool = os.getenv(
+        "INTEGRATIONS_BACKGROUND_SYNC_ENABLED", "true"
+    ).lower() in {"1", "true", "yes", "on"}
 
 
 settings = AppSettings()

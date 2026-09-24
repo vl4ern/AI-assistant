@@ -6,9 +6,9 @@ from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-from ..interfaces import IServiceAdapter
-from models.google_models import GoogleCalendarEvent
-from models.task import Task
+from app.modules.integrations.integration.interfaces import IServiceAdapter
+from app.modules.integrations.models.google_models import GoogleCalendarEvent
+from app.modules.integrations.models.task import Task
 
 # Если модифицируем права, удаляем сохраненный токен
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]

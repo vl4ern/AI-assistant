@@ -1,10 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { apiRequest } from './api/client';
+import {
+  getIntegrations,
+  syncAllIntegrations,
+  syncIntegration,
+} from './api/integrations';
+import type { IntegrationAdapterStatus } from './api/integrations';
+import { rebuildSchedule } from './api/schedule';
+import type { SchedulePlan } from './api/schedule';
 import { createTask as createTaskApi, getTasks, updateTaskStatus } from './api/tasks';
 import type { ApiTask, ApiTaskCreate, ApiTaskStatus } from './types/api';
 
-type Page = 'dashboard' | 'tasks' | 'history' | 'calendar' | 'docs';
+type Page = 'dashboard' | 'tasks' | 'history' | 'calendar' | 'integrations' | 'docs';
 type ActiveTaskFilter = 'all' | 'high' | 'blocked' | 'without_deadline';
 type HistoryFilter = 'all' | 'completed' | 'cancelled';
 
@@ -72,6 +80,7 @@ const navItems: Array<{ id: Page; label: string }> = [
   { id: 'tasks', label: 'Задачи' },
   { id: 'history', label: 'История' },
   { id: 'calendar', label: 'События' },
+  { id: 'integrations', label: 'Интеграции' },
   { id: 'docs', label: 'Документация' },
 ];
 
@@ -199,6 +208,11 @@ function App() {
   const [error, setError] = useState('');
   const [taskForm, setTaskForm] = useState<TaskForm>(initialTaskForm);
   const [eventForm, setEventForm] = useState<EventForm>(initialEventForm);
+  const [adapters, setAdapters] = useState<IntegrationAdapterStatus[]>([]);
+  const [isAdaptersLoading, setIsAdaptersLoading] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [schedulePlan, setSchedulePlan] = useState<SchedulePlan | null>(null);
+  const [isRebuilding, setIsRebuilding] = useState(false);
 
   const activeTasksList = useMemo(
     () => tasks.filter((task) => ['todo', 'in_progress', 'blocked'].includes(task.status)),
@@ -306,9 +320,84 @@ function App() {
     await Promise.all([loadTasks(), loadEvents()]);
   }
 
+  async function loadAdapters(): Promise<void> {
+    try {
+      setIsAdaptersLoading(true);
+      setError('');
+
+      const loadedAdapters = await getIntegrations();
+      setAdapters(loadedAdapters);
+    } catch (loadError) {
+      setError(`Не удалось загрузить интеграции: ${getErrorMessage(loadError)}`);
+    } finally {
+      setIsAdaptersLoading(false);
+    }
+  }
+
+  async function handleSyncAdapter(adapterName: string): Promise<void> {
+    try {
+      setIsSyncing(true);
+      setError('');
+
+      const result = await syncIntegration(adapterName);
+      setMessage(
+        `Синхронизация «${result.provider}» завершена: ${result.synced_items} записей, ` +
+          `конфликтов: ${result.conflicts_detected}.`
+      );
+
+      await Promise.all([loadAdapters(), loadEvents()]);
+    } catch (syncError) {
+      setError(`Не удалось синхронизировать «${adapterName}»: ${getErrorMessage(syncError)}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  }
+
+  async function handleSyncAllAdapters(): Promise<void> {
+    try {
+      setIsSyncing(true);
+      setError('');
+
+      const result = await syncAllIntegrations();
+      setMessage(
+        `Синхронизация завершена: ${result.synced_items} записей, ` +
+          `конфликтов: ${result.conflicts_detected}.`
+      );
+
+      await Promise.all([loadAdapters(), loadEvents()]);
+    } catch (syncError) {
+      setError(`Не удалось выполнить синхронизацию: ${getErrorMessage(syncError)}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  }
+
+  async function handleRebuildSchedule(): Promise<void> {
+    try {
+      setIsRebuilding(true);
+      setError('');
+
+      const plan = await rebuildSchedule();
+      setSchedulePlan(plan);
+      setMessage(
+        `План построен: слотов — ${plan.slots.length}, вне плана — ${plan.unscheduled_task_ids.length}.`
+      );
+    } catch (planError) {
+      setError(`Не удалось построить план: ${getErrorMessage(planError)}`);
+    } finally {
+      setIsRebuilding(false);
+    }
+  }
+
   useEffect(() => {
     void loadKnowledgeBase();
   }, []);
+
+  useEffect(() => {
+    if (activePage === 'integrations') {
+      void loadAdapters();
+    }
+  }, [activePage]);
 
   function updateTaskFormField(field: keyof TaskForm, value: string): void {
     setTaskForm((previousForm) => ({
@@ -1158,6 +1247,64 @@ function App() {
                     </table>
                   </section>
                 </div>
+
+                <section className="panel">
+                  <h3>План на сегодня (модуль планировщика)</h3>
+                  <p className="panel-description">
+                    Планировщик раскладывает активные задачи по свободным интервалам
+                    между событиями с учётом скоринга и зависимостей.
+                  </p>
+
+                  <div className="form-grid">
+                    <div className="form-field full">
+                      <button
+                        className="button primary"
+                        disabled={isRebuilding}
+                        onClick={() => void handleRebuildSchedule()}
+                      >
+                        {isRebuilding ? 'Строим план...' : 'Построить план'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {schedulePlan && schedulePlan.slots.length === 0 && (
+                    <p className="panel-description">
+                      Активных задач для планирования нет — добавьте задачу на странице «Задачи».
+                    </p>
+                  )}
+
+                  {schedulePlan && schedulePlan.slots.length > 0 && (
+                    <ul className="event-list">
+                      {schedulePlan.slots.map((slot) => (
+                        <li
+                          key={`${slot.task_id}-${slot.start_at}`}
+                          className="event-card"
+                        >
+                          <div>
+                            <h4 className="event-title">{slot.title}</h4>
+                            <div className="badges">
+                              <span className="badge">
+                                Начало: {formatDateTime(slot.start_at)}
+                              </span>
+                              <span className="badge">
+                                Конец: {formatDateTime(slot.end_at)}
+                              </span>
+                              {slot.task_id === schedulePlan.prime_task_id && (
+                                <span className="badge pinned">Главная задача дня</span>
+                              )}
+                            </div>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  {schedulePlan && schedulePlan.unscheduled_task_ids.length > 0 && (
+                    <p className="panel-description">
+                      Не удалось запланировать задач: {schedulePlan.unscheduled_task_ids.length}.
+                    </p>
+                  )}
+                </section>
               </div>
             </>
           )}
@@ -1428,6 +1575,91 @@ function App() {
                 </p>
 
                 <EventList events={events} isLoading={isEventsLoading} />
+              </section>
+            </div>
+          )}
+
+          {activePage === 'integrations' && (
+            <div className="grid-two">
+              <section className="panel">
+                <h3>Внешние источники</h3>
+                <p className="panel-description">
+                  Синхронизация расписания БГУИР (iis.bsuir.by) и Google Calendar.
+                  Занятия и события автоматически попадают в базу знаний.
+                </p>
+
+                {isAdaptersLoading && <p className="panel-description">Загрузка адаптеров...</p>}
+
+                {!isAdaptersLoading && adapters.length === 0 && (
+                  <p className="panel-description">
+                    Адаптеры не настроены. Укажите номер группы в переменной окружения
+                    `IIS_GROUP_NUMBER` или положите `credentials.json` для Google Calendar.
+                  </p>
+                )}
+
+                {adapters.length > 0 && (
+                  <ul className="event-list">
+                    {adapters.map((adapter) => (
+                      <li key={adapter.name} className="event-card">
+                        <div>
+                          <h4 className="event-title">{adapter.name}</h4>
+                          <div className="badges">
+                            <span className="badge">Источник: {adapter.source}</span>
+                            <span className="badge">
+                              Интервал: {Math.round(adapter.sync_interval_seconds / 60)} мин
+                            </span>
+                            <span className="badge">
+                              Последняя синхронизация:{' '}
+                              {adapter.last_sync_at ? formatDateTime(adapter.last_sync_at) : 'ещё не выполнялась'}
+                            </span>
+                            <span className="badge">
+                              Фоновый режим: {adapter.running ? 'включён' : 'выключен'}
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          className="button primary"
+                          disabled={isSyncing}
+                          onClick={() => void handleSyncAdapter(adapter.name)}
+                        >
+                          {isSyncing ? 'Синхронизация...' : 'Синхронизировать'}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                <button
+                  className="button primary"
+                  disabled={isSyncing || adapters.length === 0}
+                  onClick={() => void handleSyncAllAdapters()}
+                >
+                  {isSyncing ? 'Синхронизация...' : 'Синхронизировать всё'}
+                </button>
+              </section>
+
+              <section className="panel">
+                <h3>Как это работает</h3>
+                <p className="panel-description">
+                  Модуль интеграции опрашивает внешние сервисы через адаптеры, разрешает
+                  конфликты версий и сохраняет новые занятия как события базы знаний.
+                  Кэш синхронизации хранится в SQLite, повторные запуски не создают
+                  дубликаты.
+                </p>
+                <div className="facts">
+                  <div className="fact">
+                    <strong>IIS БГУИР</strong>
+                    <span>Расписание группы: номер задаётся переменной `IIS_GROUP_NUMBER`.</span>
+                  </div>
+                  <div className="fact">
+                    <strong>Google Calendar</strong>
+                    <span>Требуется `credentials.json` и первичная авторизация.</span>
+                  </div>
+                  <div className="fact">
+                    <strong>База знаний</strong>
+                    <span>Новые занятия появляются в разделе «События» и учитываются планировщиком.</span>
+                  </div>
+                </div>
               </section>
             </div>
           )}

@@ -1,10 +1,122 @@
-import json
-import requests
-from datetime import datetime
-from typing import List, Dict, Any, Optional
-from integration.sync_scheduler import SyncScheduler
-from models.task import Task
-from models.sync import ConflictNotification, SyncResult
+from datetime import datetime, timedelta, timezone
+from typing import Any, List, Optional
+
+from app.modules.integrations.integration.sync_scheduler import SyncScheduler
+from app.modules.integrations.models.sync import ConflictNotification, SyncResult
+from app.modules.integrations.models.task import Task
+from app.modules.knowledge.models import EventCreate, TaskCreate
+from app.modules.knowledge.service import KnowledgeService
+
+DEFAULT_EVENT_DURATION_MINUTES = 90
+
+SOURCE_TO_EVENT_SOURCE = {
+    "IIS": "bsuir-lms",
+    "google_calendar": "google-calendar",
+}
+
+
+class KnowledgeIngestClient:
+    """
+    Прямой клиент записи фактов в Knowledge Base (без HTTP).
+
+    Занятия IIS и события Google Calendar сохраняются как события
+    базы знаний (занятое время для планировщика), остальные — как задачи.
+    Дедупликация защищает от повторного создания при пересинхронизации.
+    """
+
+    def __init__(self, knowledge_service: KnowledgeService) -> None:
+        self._kb = knowledge_service
+        self._event_keys: Optional[set[tuple[str, str, datetime]]] = None
+        self._task_keys: Optional[set[tuple[str, Optional[datetime]]]] = None
+
+    def ingest_fact(self, fact: dict) -> None:
+        fact_type = fact.get("type")
+
+        if fact_type == "task":
+            self._ingest_task_fact(fact)
+        elif fact_type == "sync_completed":
+            print(
+                f"[KBBridge] KB: синхронизация {fact.get('adapter')} завершена "
+                f"({fact.get('tasks_synced')} задач, "
+                f"{fact.get('conflicts_detected')} конфликтов)"
+            )
+        elif fact_type == "sync_error":
+            print(f"[KBBridge] KB: ошибка синхронизации {fact.get('adapter')}: {fact.get('error')}")
+        elif fact_type == "conflict":
+            print(
+                f"[KBBridge] KB: конфликт по задаче {fact.get('task_id')}, "
+                f"поля: {fact.get('fields')}, предложение: {fact.get('suggestion')}"
+            )
+        elif fact_type == "task_deleted":
+            # База знаний хранит факты immutable и не поддерживает удаление.
+            print(f"[KBBridge] KB: задача {fact.get('external_id')} удалена из источника")
+
+    def _ingest_task_fact(self, fact: dict) -> None:
+        entity_type = fact.get("entity_type") or "manual_task"
+        due_date = _parse_datetime(fact.get("due_date"))
+
+        if entity_type in ("lesson", "calendar_event"):
+            self._upsert_event(fact, due_date)
+        else:
+            self._upsert_task(fact, due_date)
+
+    def _upsert_event(self, fact: dict, start: Optional[datetime]) -> None:
+        if start is None:
+            print(f"[KBBridge] Пропущено событие без времени: {fact.get('title')}")
+            return
+
+        source = SOURCE_TO_EVENT_SOURCE.get(fact.get("source"), fact.get("source") or "manual")
+        title = fact.get("title") or "Событие внешнего календаря"
+        key = (source, title, _normalize_key_datetime(start))
+
+        if self._event_keys is None:
+            self._event_keys = {
+                (event.source, event.title, _normalize_key_datetime(event.start_at))
+                for event in self._kb.list_events()
+            }
+
+        if key in self._event_keys:
+            return
+
+        duration_minutes = fact.get("duration_minutes") or DEFAULT_EVENT_DURATION_MINUTES
+        end = start + timedelta(minutes=duration_minutes)
+
+        event = self._kb.create_event(
+            EventCreate(
+                title=title,
+                start_at=start,
+                end_at=end,
+                source=source,
+            )
+        )
+        self._event_keys.add(key)
+        print(f"[KBBridge] → KB: создано событие '{event.title}' ({source})")
+
+    def _upsert_task(self, fact: dict, deadline: Optional[datetime]) -> None:
+        title = fact.get("title") or "Задача из внешнего сервиса"
+        key = (title, _normalize_key_datetime(deadline) if deadline else None)
+
+        if self._task_keys is None:
+            self._task_keys = {
+                (task.title, _normalize_key_datetime(task.deadline) if task.deadline else None)
+                for task in self._kb.list_tasks()
+            }
+
+        if key in self._task_keys:
+            return
+
+        task = self._kb.create_task(
+            TaskCreate(
+                title=title,
+                description=fact.get("description"),
+                estimated_minutes=max(15, fact.get("duration_minutes") or 30),
+                priority=min(4, max(1, fact.get("priority") or 3)),
+                deadline=deadline,
+                project_id=fact.get("project_id") or None,
+            )
+        )
+        self._task_keys.add(key)
+        print(f"[KBBridge] → KB: создана задача '{task.title}'")
 
 
 class KnowledgeBaseBridge:
@@ -16,25 +128,18 @@ class KnowledgeBaseBridge:
     def __init__(
         self,
         scheduler: SyncScheduler,
-        kb_api_url: str = "http://localhost:8000/api/knowledge",
-        use_http: bool = True,
-        direct_kb_client: Optional[Any] = None,
+        kb_client: Optional[Any] = None,
     ):
         """
         Args:
             scheduler: экземпляр планировщика синхронизации
-            kb_api_url: URL API Knowledge Base (если use_http=True)
-            use_http: использовать HTTP API или прямой клиент Python
-            direct_kb_client: прямой клиент KB (если use_http=False)
+            kb_client: клиент записи фактов в KB
+                (по умолчанию используется прямой клиент KnowledgeService)
         """
         self.scheduler = scheduler
-        self.kb_api_url = kb_api_url
-        self.use_http = use_http
-        self.direct_kb_client = direct_kb_client
+        self.kb_client = kb_client
 
-        # Подписываемся на все важные события
         self._subscribe_to_events()
-
         print("[KBBridge] Мост с Knowledge Base инициализирован")
 
     def _subscribe_to_events(self):
@@ -51,18 +156,12 @@ class KnowledgeBaseBridge:
         """Новая задача создана в кэше"""
         kb_fact = self._task_to_kb_fact(task, action="created")
         self._send_to_kb(kb_fact)
-        print(f"[KBBridge] → KB: создана задача '{task.title}'")
 
     def on_task_updated(self, task: Task, old_task: Task):
         """Задача обновлена"""
         kb_fact = self._task_to_kb_fact(task, action="updated")
-        # Добавляем информацию об изменениях
-        changes = self._detect_changes(old_task, task)
-        kb_fact["changes"] = changes
+        kb_fact["changes"] = self._detect_changes(old_task, task)
         self._send_to_kb(kb_fact)
-        print(
-            f"[KBBridge] → KB: обновлена задача '{task.title}' (изменений: {len(changes)})"
-        )
 
     def on_task_deleted(self, task_id: str, external_id: str, source_type: str):
         """Задача удалена из кэша"""
@@ -74,7 +173,6 @@ class KnowledgeBaseBridge:
             "timestamp": datetime.now().isoformat(),
         }
         self._send_to_kb(kb_fact)
-        print(f"[KBBridge] → KB: удалена задача {external_id}")
 
     def on_sync_completed(self, adapter_name: str, result: SyncResult):
         """Синхронизация адаптера завершена"""
@@ -87,9 +185,6 @@ class KnowledgeBaseBridge:
             "timestamp": datetime.now().isoformat(),
         }
         self._send_to_kb(kb_event)
-        print(
-            f"[KBBridge] → KB: синхронизация {adapter_name} завершена ({result.tasks_synced} задач)"
-        )
 
     def on_sync_error(self, adapter_name: str, error: str):
         """Ошибка синхронизации"""
@@ -113,30 +208,8 @@ class KnowledgeBaseBridge:
         }
         self._send_to_kb(kb_event)
 
-    def force_sync_all_tasks(self):
-        """
-        Принудительная отправка ВСЕХ задач из кэша в KB.
-        Полезно при первом подключении или восстановлении после сбоя.
-        """
-        print("[KBBridge] Полная синхронизация с KB...")
-        all_tasks = self.scheduler.cache.get_all_tasks()
-
-        for task in all_tasks:
-            kb_fact = self._task_to_kb_fact(task, action="synced")
-            self._send_to_kb(kb_fact)
-
-        print(f"[KBBridge] Отправлено {len(all_tasks)} задач в KB")
-
     def _task_to_kb_fact(self, task: Task, action: str) -> dict:
-        """
-        Преобразование Task в формат Knowledge Base.
-
-        Здесь можно добавить любую логику:
-        - Разбиение на сущности (Lesson, Event, Task)
-        - Извлечение из description структурированных данных
-        - Связывание с другими сущностями в KB
-        """
-        # Базовое представление
+        """Преобразование Task в формат факта Knowledge Base."""
         fact = {
             "type": "task",
             "action": action,
@@ -156,15 +229,14 @@ class KnowledgeBaseBridge:
             "timestamp": datetime.now().isoformat(),
         }
 
-        # Дополнительная семантическая обработка для IIS занятий
+        # Семантическая обработка для разных источников
         if task.source_type.value == "IIS":
             fact["entity_type"] = "lesson"
-            # Извлечение информации из description (аудитория, преподаватель и т.д.)
             extracted = self._extract_lesson_info(task.description)
             fact.update(extracted)
         elif task.source_type.value == "google_calendar":
             fact["entity_type"] = "calendar_event"
-        elif task.source_type.value == "manual":
+        else:
             fact["entity_type"] = "manual_task"
 
         return fact
@@ -172,9 +244,10 @@ class KnowledgeBaseBridge:
     def _extract_lesson_info(self, description: str) -> dict:
         """Извлечение структурированной информации о занятии из описания"""
         info = {}
-        lines = description.split("\n")
+        if not description:
+            return info
 
-        for line in lines:
+        for line in description.split("\n"):
             if line.startswith("Тип:"):
                 info["lesson_type"] = line.replace("Тип:", "").strip()
             elif line.startswith("Аудитория:"):
@@ -210,41 +283,13 @@ class KnowledgeBaseBridge:
         return changes
 
     def _send_to_kb(self, fact: dict):
-        """
-        Отправка факта в Knowledge Base.
-        Поддерживает HTTP API или прямой вызов.
-        """
-        if self.use_http:
-            self._send_via_http(fact)
-        elif self.direct_kb_client:
-            self._send_via_direct_client(fact)
-        else:
-            print(f"[KBBridge] Ошибка: не настроен способ отправки в KB")
-
-    def _send_via_http(self, fact: dict):
-        """Отправка через HTTP API Knowledge Base"""
+        """Отправка факта в Knowledge Base."""
+        if self.kb_client is None:
+            return
         try:
-            response = requests.post(
-                self.kb_api_url,
-                json=fact,
-                headers={"Content-Type": "application/json"},
-                timeout=5,
-            )
-            if response.status_code >= 400:
-                print(
-                    f"[KBBridge] Ошибка KB API ({response.status_code}): {response.text}"
-                )
-        except requests.exceptions.RequestException as e:
-            print(f"[KBBridge] Ошибка соединения с KB: {e}")
-            # Здесь можно добавить в retry_queue
-
-    def _send_via_direct_client(self, fact: dict):
-        """Отправка через прямой Python клиент KB"""
-        try:
-            # Предполагается, что у KB есть метод ingest_fact
-            self.direct_kb_client.ingest_fact(fact)
+            self.kb_client.ingest_fact(fact)
         except Exception as e:
-            print(f"[KBBridge] Ошибка прямого вызова KB: {e}")
+            print(f"[KBBridge] Ошибка записи в KB: {e}")
 
     def shutdown(self):
         """Корректное завершение"""
@@ -255,3 +300,19 @@ class KnowledgeBaseBridge:
         self.scheduler.unsubscribe("sync_error", self.on_sync_error)
         self.scheduler.unsubscribe("conflict_detected", self.on_conflict_detected)
         print("[KBBridge] Мост остановлен")
+
+
+def _parse_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_key_datetime(value: datetime) -> datetime:
+    """Приведение datetime к naive UTC для стабильных ключей дедупликации."""
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)

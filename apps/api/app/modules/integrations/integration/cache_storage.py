@@ -1,9 +1,11 @@
-import sqlite3
 import json
-from typing import Optional, List
+import os
+import sqlite3
 from datetime import datetime
-from app.modules.integrations.models.task import Task, SourceType, TaskStatus
+from typing import List, Optional
+
 from app.modules.integrations.integration.interfaces import ICacheStorage
+from app.modules.integrations.models.task import Task
 
 
 class SQLiteCacheStorage(ICacheStorage):
@@ -11,6 +13,9 @@ class SQLiteCacheStorage(ICacheStorage):
 
     def __init__(self, db_path: str = "cache.db"):
         self.db_path = db_path
+        db_dir = os.path.dirname(db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
         self._init_db()
 
     def _init_db(self):

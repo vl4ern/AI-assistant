@@ -24,6 +24,15 @@ apps/web/frontend/node_modules/
 .env.*
 !.env.example
 
+# Integration cache and credentials
+data/
+apps/api/data/
+credentials.json
+google_token.pickle
+*.db
+*.db-shm
+*.db-wal
+
 # Logs
 *.log
 

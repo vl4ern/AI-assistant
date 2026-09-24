@@ -1,12 +1,17 @@
 SHELL := /bin/bash
 
+-include .env
+export
+
+API_PORT ?= 8000
+
 .PHONY: api-install api-dev api-test web-install web-dev web-lint compose-up compose-down
 
 api-install:
 	python3 -m venv .venv && ./.venv/bin/pip install -r apps/api/requirements-dev.txt
 
 api-dev:
-	./.venv/bin/uvicorn app.main:app --app-dir apps/api --reload --host 0.0.0.0 --port 8000
+	./.venv/bin/uvicorn app.main:app --app-dir apps/api --reload --host 0.0.0.0 --port $(API_PORT)
 
 api-test:
 	PYTHONPATH=apps/api ./.venv/bin/pytest apps/api/tests -q

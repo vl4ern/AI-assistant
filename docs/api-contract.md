@@ -50,8 +50,9 @@
 
 ## Integrations
 
-- `GET /v1/integrations` — список доступных провайдеров.
-- `POST /v1/integrations/{provider_name}/sync` — синхронизировать провайдер.
+- `GET /v1/integrations` — список адаптеров со статусом синхронизации.
+- `POST /v1/integrations/sync` — синхронизировать все адаптеры.
+- `POST /v1/integrations/{provider_name}/sync` — синхронизировать один адаптер.
 
 ## Правила совместимости
 

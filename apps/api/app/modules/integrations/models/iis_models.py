@@ -136,6 +136,8 @@ class IisScheduleItem:
         desc_parts = []
         if self.subjectFullName:
             desc_parts.append(f"📘 {self.subjectFullName}")
+        if self.dayOfWeek:
+            desc_parts.append(f"День недели: {self.dayOfWeek}")
         desc_parts.append(f"Тип: {self.lessonTypeAbbrev}")
         if self.auditories:
             desc_parts.append(f"Аудитория: {', '.join(self.auditories)}")
@@ -199,6 +201,13 @@ class IisScheduleItem:
 
         external_id = self._generate_external_id()
 
+        try:
+            start_time = datetime.strptime(self.startLessonTime, "%H:%M")
+            end_time = datetime.strptime(self.endLessonTime, "%H:%M")
+            duration_minutes = max(30, int((end_time - start_time).total_seconds() / 60))
+        except (ValueError, TypeError):
+            duration_minutes = 90
+
         return Task(
             id=str(
                 uuid.uuid4()
@@ -208,6 +217,8 @@ class IisScheduleItem:
             title=title,
             description=description,
             due_date=due_date,
+            duration_minutes=duration_minutes,
             labels=[self.lessonTypeAbbrev],
+            version=2,
             # остальные поля оставим по умолчанию
         )

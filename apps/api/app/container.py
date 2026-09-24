@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from app.core.settings import settings
-from app.modules.integrations.providers import default_providers
 from app.modules.integrations.service import IntegrationService
 from app.modules.intelligence.ml_scoring import MLScoringService
 from app.modules.intelligence.scheduler import GreedyScheduler
@@ -59,7 +58,11 @@ class Container:
         )
 
         self.integration_service = IntegrationService(
-            providers=default_providers(),
+            knowledge_service=self.knowledge_service,
+            cache_path=settings.integration_cache_path,
+            iis_group_number=settings.iis_group_number,
+            google_credentials_file=settings.google_credentials_file,
+            google_token_file=settings.google_token_file,
         )
 
         self._seed_demo_data()

@@ -2,11 +2,11 @@ import time
 import threading
 from datetime import datetime
 from typing import List, Dict, Optional, Callable
-from integration.interfaces import IServiceAdapter, ICacheStorage
-from integration.conflict_resolver import ConflictResolver
-from integration.retry_queue import RetryQueue
-from models.sync import SyncResult
-from models.task import Task
+from app.modules.integrations.integration.conflict_resolver import ConflictResolver
+from app.modules.integrations.integration.interfaces import ICacheStorage, IServiceAdapter
+from app.modules.integrations.integration.retry_queue import RetryQueue
+from app.modules.integrations.models.sync import SyncResult
+from app.modules.integrations.models.task import Task
 
 
 class SyncEvent:
@@ -108,6 +108,7 @@ class SyncScheduler:
             try:
                 self._emit_event("sync_started", {"adapter_name": name})
                 self._sync_adapter(name, adapter, result)
+                self.last_sync_time[name] = datetime.now()
                 self._emit_event(
                     "sync_completed", {"adapter_name": name, "result": result}
                 )
@@ -162,6 +163,10 @@ class SyncScheduler:
 
                 if self.cache.save_task(resolved):
                     result.tasks_synced += 1
+
+                    for conflict in conflicts:
+                        result.conflicts_detected += 1
+                        self._emit_event("conflict_detected", {"conflict": conflict})
 
                     if resolved.version != old_version or len(conflicts) > 0:
                         # Задача действительно изменилась

@@ -14,12 +14,12 @@ def test_build_working_windows_typical_day() -> None:
 
 def test_build_working_windows_wake_end_24() -> None:
     start = datetime(2026, 5, 3, 8, 0, tzinfo=timezone.utc)
-    end   = datetime(2026, 5, 4, 8, 0, tzinfo=timezone.utc)
+    end   = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
     windows = build_working_windows(start, end, wake_start_hour=8, wake_end_hour=24)
 
-    assert len(windows) == 1
-    assert windows[0][0] == start
-    assert windows[0][1] == end
+    assert len(windows) == 2
+    assert windows[0] == (start, datetime(2026, 5, 4, 0, 0, tzinfo=timezone.utc))
+    assert windows[1] == (datetime(2026, 5, 4, 8, 0, tzinfo=timezone.utc), end)
 
 
 def test_build_working_windows_span_multiple_days() -> None:
