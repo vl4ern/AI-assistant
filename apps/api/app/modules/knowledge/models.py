@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 
 TaskStatus = Literal["todo", "in_progress", "completed", "cancelled", "blocked"]
 
+SHARED_USER_ID = "shared"
+
 
 class TaskBase(BaseModel):
     title: str = Field(min_length=1, max_length=200)
@@ -23,6 +25,7 @@ class TaskBase(BaseModel):
     min_chunk_minutes: int | None = Field(default=None, ge=15, le=24 * 60)
     scheduled_start: datetime | None = None
     scheduled_end: datetime | None = None
+    user_id: str = Field(default=SHARED_USER_ID)
 
 
 class TaskCreate(TaskBase):
@@ -45,6 +48,7 @@ class EventBase(BaseModel):
     start_at: datetime
     end_at: datetime
     source: str = "manual"
+    user_id: str = Field(default=SHARED_USER_ID)
 
 
 class EventCreate(EventBase):

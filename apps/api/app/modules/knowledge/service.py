@@ -24,22 +24,26 @@ class KnowledgeService:
     def __init__(self, repository: KnowledgeRepository) -> None:
         self._repository = repository
 
-    def list_tasks(self) -> list[Task]:
+    def list_tasks(self, user_id: str | None = None) -> list[Task]:
         """
-        Return all task facts stored in the knowledge base.
+        Return task facts visible to the user (personal and shared).
         """
-        return self._repository.list_tasks()
+        return self._repository.list_tasks(user_id)
 
-    def list_active_tasks(self) -> list[Task]:
+    def list_active_tasks(self, user_id: str | None = None) -> list[Task]:
         """
         Return tasks that are still relevant for the user.
 
         Completed and cancelled tasks remain stored in the knowledge base,
         but they are not considered active work items.
         """
-        return [task for task in self._repository.list_tasks() if is_active_task(task)]
+        return [
+            task
+            for task in self._repository.list_tasks(user_id)
+            if is_active_task(task)
+        ]
 
-    def list_schedulable_tasks(self) -> list[Task]:
+    def list_schedulable_tasks(self, user_id: str | None = None) -> list[Task]:
         """
         Return tasks that may be considered by a planner.
 
@@ -47,7 +51,7 @@ class KnowledgeService:
         """
         return [
             task
-            for task in self._repository.list_tasks()
+            for task in self._repository.list_tasks(user_id)
             if is_schedulable_task(task)
         ]
 
@@ -90,11 +94,11 @@ class KnowledgeService:
         """
         return self._repository.update_task_schedule(task_id, start_at, end_at)
 
-    def list_events(self) -> list[Event]:
+    def list_events(self, user_id: str | None = None) -> list[Event]:
         """
-        Return all event facts stored in the knowledge base.
+        Return event facts visible to the user (personal and shared).
         """
-        return self._repository.list_events()
+        return self._repository.list_events(user_id)
 
     def create_event(self, payload: EventCreate) -> Event:
         """

@@ -5,7 +5,10 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from app.modules.auth.models import User
+
 from .models import Event, EventCreate, Task, TaskCreate, TaskStatus
+from .models import SHARED_USER_ID
 from .repository import KnowledgeRepository
 
 try:
@@ -34,6 +37,13 @@ class PostgresKnowledgeRepository(KnowledgeRepository):
             cur.execute(schema_sql)
             conn.commit()
 
+        migrations_dir = Path(__file__).with_name("migrations")
+        migration_files = sorted(migrations_dir.glob("*.sql"))
+        with self._connect() as conn, conn.cursor() as cur:
+            for migration_file in migration_files:
+                cur.execute(migration_file.read_text(encoding="utf-8"))
+            conn.commit()
+
     @staticmethod
     def _task_from_row(row: Any) -> Task:
         depends_on = list(row[13]) if row[13] else []
@@ -55,10 +65,12 @@ class PostgresKnowledgeRepository(KnowledgeRepository):
             updated_at=row[14],
             scheduled_start=row[15],
             scheduled_end=row[16],
+            user_id=row[17],
         )
 
-    def list_tasks(self) -> list[Task]:
-        query = """
+    @staticmethod
+    def _task_query(where_clause: str = "") -> str:
+        return f"""
             SELECT
                 t.id,
                 t.title,
@@ -75,49 +87,32 @@ class PostgresKnowledgeRepository(KnowledgeRepository):
                 t.created_at,
                 COALESCE(
                     ARRAY_AGG(td.depends_on_task_id) FILTER (WHERE td.depends_on_task_id IS NOT NULL),
-                    '{}'
+                    '{{}}'
                 ) AS depends_on,
                 t.updated_at,
                 t.scheduled_start,
-                t.scheduled_end
+                t.scheduled_end,
+                t.user_id
             FROM tasks t
             LEFT JOIN task_dependencies td ON td.task_id = t.id
+            {where_clause}
             GROUP BY t.id
             ORDER BY t.created_at ASC
         """
+
+    def list_tasks(self, user_id: str | None = None) -> list[Task]:
+        query = self._task_query()
+        params: tuple[Any, ...] = ()
+        if user_id is not None:
+            query = self._task_query("WHERE t.user_id = ANY(%s)")
+            params = ([user_id, SHARED_USER_ID],)
         with self._connect() as conn, conn.cursor() as cur:
-            cur.execute(query)
+            cur.execute(query, params)
             rows = cur.fetchall()
         return [self._task_from_row(row) for row in rows]
 
     def get_task(self, task_id: str) -> Task | None:
-        query = """
-            SELECT
-                t.id,
-                t.title,
-                t.description,
-                t.estimated_minutes,
-                t.priority,
-                t.deadline,
-                t.workspace_id,
-                t.project_id,
-                t.auto_reschedule,
-                t.allow_split,
-                t.min_chunk_minutes,
-                t.status,
-                t.created_at,
-                COALESCE(
-                    ARRAY_AGG(td.depends_on_task_id) FILTER (WHERE td.depends_on_task_id IS NOT NULL),
-                    '{}'
-                ) AS depends_on,
-                t.updated_at,
-                t.scheduled_start,
-                t.scheduled_end
-            FROM tasks t
-            LEFT JOIN task_dependencies td ON td.task_id = t.id
-            WHERE t.id = %s
-            GROUP BY t.id
-        """
+        query = self._task_query("WHERE t.id = %s")
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(query, (task_id,))
             row = cur.fetchone()
@@ -144,9 +139,10 @@ class PostgresKnowledgeRepository(KnowledgeRepository):
                 created_at,
                 updated_at,
                 scheduled_start,
-                scheduled_end
+                scheduled_end,
+                user_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         insert_dep = """
             INSERT INTO task_dependencies (task_id, depends_on_task_id)
@@ -173,6 +169,7 @@ class PostgresKnowledgeRepository(KnowledgeRepository):
                     item.updated_at,
                     item.scheduled_start,
                     item.scheduled_end,
+                    item.user_id,
                 ),
             )
             for dependency_id in item.depends_on:
@@ -221,32 +218,92 @@ class PostgresKnowledgeRepository(KnowledgeRepository):
             return None
         return self.get_task(task_id)
 
-    def list_events(self) -> list[Event]:
+    def list_events(self, user_id: str | None = None) -> list[Event]:
         query = """
-            SELECT id, title, start_at, end_at, source
+            SELECT id, title, start_at, end_at, source, user_id
             FROM events
-            ORDER BY start_at ASC
         """
+        params: tuple[Any, ...] = ()
+        if user_id is not None:
+            query += " WHERE user_id = ANY(%s)"
+            params = ([user_id, SHARED_USER_ID],)
+        query += " ORDER BY start_at ASC"
         with self._connect() as conn, conn.cursor() as cur:
-            cur.execute(query)
+            cur.execute(query, params)
             rows = cur.fetchall()
         return [
-            Event(id=row[0], title=row[1], start_at=row[2], end_at=row[3], source=row[4])
+            Event(
+                id=row[0],
+                title=row[1],
+                start_at=row[2],
+                end_at=row[3],
+                source=row[4],
+                user_id=row[5],
+            )
             for row in rows
         ]
 
     def create_event(self, payload: EventCreate) -> Event:
         item = Event(**payload.model_dump())
         query = """
-            INSERT INTO events (id, title, start_at, end_at, source)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO events (id, title, start_at, end_at, source, user_id)
+            VALUES (%s, %s, %s, %s, %s, %s)
         """
         with self._connect() as conn, conn.cursor() as cur:
-            cur.execute(query, (item.id, item.title, item.start_at, item.end_at, item.source))
+            cur.execute(
+                query,
+                (item.id, item.title, item.start_at, item.end_at, item.source, item.user_id),
+            )
             conn.commit()
         with self._lock:
             self._schedule_dirty = True
         return item
+
+    def create_user(
+        self,
+        username: str,
+        password_hash: str,
+        salt: str,
+        user_id: str | None = None,
+    ) -> User:
+        user_data: dict[str, str] = {
+            "username": username,
+            "password_hash": password_hash,
+            "salt": salt,
+        }
+        if user_id:
+            user_data["id"] = user_id
+        user = User(**user_data)
+        query = """
+            INSERT INTO users (id, username, password_hash, salt, created_at)
+            VALUES (%s, %s, %s, %s, %s)
+        """
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                query,
+                (user.id, user.username, user.password_hash, user.salt, user.created_at),
+            )
+            conn.commit()
+        return user
+
+    def get_user_by_username(self, username: str) -> User | None:
+        query = """
+            SELECT id, username, password_hash, salt, created_at
+            FROM users
+            WHERE username = %s
+        """
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(query, (username,))
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return User(
+            id=row[0],
+            username=row[1],
+            password_hash=row[2],
+            salt=row[3],
+            created_at=row[4],
+        )
 
     def is_schedule_dirty(self) -> bool:
         with self._lock:

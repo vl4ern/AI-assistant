@@ -165,15 +165,17 @@ def test_integration_rebuild_today_reorder_completion_retrains_batch() -> None:
         )
     )
 
+    # Часы 0–24, чтобы тест не зависел от времени запуска:
+    # при «вечернем» запуске окно 8–23 уже не вмещает задачи.
     scheduler = GreedyScheduler(
         slot_minutes=30,
         horizon_days=2,
-        wake_start_hour=8,
-        wake_end_hour=23,
+        wake_start_hour=0,
+        wake_end_hour=24,
     )
     scoring = MLScoringService(
-        wake_start_hour=8,
-        wake_end_hour=23,
+        wake_start_hour=0,
+        wake_end_hour=24,
         horizon_days=7,
         retrain_batch_size=2,
         overdue_bonus=10,

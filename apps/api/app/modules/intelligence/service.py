@@ -38,7 +38,7 @@ class SchedulerService:
         self.scoring_service = scoring_service
         self._completed_markers: dict[str, datetime] = {}
 
-    def rebuild(self) -> SchedulePlan:
+    def rebuild(self, user_id: str | None = None) -> SchedulePlan:
         """
         Полностью перестраивает расписание.
 
@@ -50,8 +50,8 @@ class SchedulerService:
         6. Возвращает объект SchedulePlan.
         """
         now = datetime.now(timezone.utc)
-        tasks = self.repository.list_tasks()
-        events = self.repository.list_events()
+        tasks = self.repository.list_tasks(user_id)
+        events = self.repository.list_events(user_id)
 
         for task in tasks:
             if task.auto_reschedule and task.status in {"todo", "in_progress"}:
@@ -71,7 +71,7 @@ class SchedulerService:
         self.repository.set_schedule_dirty(False)
         return plan
 
-    def today(self) -> TodayView:
+    def today(self, user_id: str | None = None) -> TodayView:
         """
         Формирует представление "Сегодня".
 
@@ -85,7 +85,7 @@ class SchedulerService:
 
         tasks = [
             task
-            for task in self.repository.list_tasks()
+            for task in self.repository.list_tasks(user_id)
             if task.scheduled_start and task.scheduled_start.date().isoformat() == date_value
         ]
         tasks.sort(key=lambda item: item.scheduled_start)
@@ -99,7 +99,9 @@ class SchedulerService:
             schedule_dirty=self.repository.is_schedule_dirty(),
         )
 
-    def record_reorder_feedback(self, payload: ReorderFeedbackRequest) -> ReorderFeedbackResult:
+    def record_reorder_feedback(
+        self, payload: ReorderFeedbackRequest, user_id: str | None = None
+    ) -> ReorderFeedbackResult:
         """
         Обрабатывает ручное перемещение задачи пользователем.
 
@@ -111,8 +113,8 @@ class SchedulerService:
         """
         now = payload.moved_at or datetime.now(timezone.utc)
 
-        tasks = self.repository.list_tasks()
-        events = self.repository.list_events()
+        tasks = self.repository.list_tasks(user_id)
+        events = self.repository.list_events(user_id)
         task_by_id = {task.id: task for task in tasks}
 
         moved_task = task_by_id.get(payload.moved_task_id)

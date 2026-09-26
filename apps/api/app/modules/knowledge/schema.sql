@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
     scheduled_start TIMESTAMPTZ NULL,
-    scheduled_end TIMESTAMPTZ NULL
+    scheduled_end TIMESTAMPTZ NULL,
+    user_id TEXT NOT NULL DEFAULT 'shared'
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -22,7 +23,16 @@ CREATE TABLE IF NOT EXISTS events (
     title VARCHAR(200) NOT NULL,
     start_at TIMESTAMPTZ NOT NULL,
     end_at TIMESTAMPTZ NOT NULL,
-    source TEXT NOT NULL DEFAULT 'manual'
+    source TEXT NOT NULL DEFAULT 'manual',
+    user_id TEXT NOT NULL DEFAULT 'shared'
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    salt TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS task_dependencies (

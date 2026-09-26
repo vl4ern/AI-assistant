@@ -51,8 +51,18 @@
 ## Integrations
 
 - `GET /v1/integrations` — список адаптеров со статусом синхронизации.
+- `GET /v1/integrations/lessons` — занятия расписания из кэша синхронизации (с учебными неделями).
+- `GET /v1/integrations/week` — текущая учебная неделя (1–4) и дата начала семестра.
+- `POST /v1/integrations/import` — импорт расписания из JSON-файла портала БГУИР.
 - `POST /v1/integrations/sync` — синхронизировать все адаптеры.
 - `POST /v1/integrations/{provider_name}/sync` — синхронизировать один адаптер.
+- `POST /v1/auth/register` — регистрация (`username`, `password`) → токен.
+- `POST /v1/auth/login` — вход → токен.
+- `GET /v1/auth/me` — текущий пользователь (заголовок `Authorization: Bearer <token>`).
+
+Задачи, события и планирование (`/v1/tasks`, `/v1/events`, `/v1/schedule/*`)
+требуют заголовок `Authorization: Bearer <token>` и возвращают только личные
+данные пользователя плюс общие (импортированное расписание).
 
 ## Правила совместимости
 

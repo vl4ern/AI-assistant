@@ -42,6 +42,14 @@ class AppSettings(BaseModel):
     integrations_background_sync_enabled: bool = os.getenv(
         "INTEGRATIONS_BACKGROUND_SYNC_ENABLED", "true"
     ).lower() in {"1", "true", "yes", "on"}
+    auth_token_secret: str = os.getenv(
+        "AUTH_TOKEN_SECRET",
+        "dev-secret-change-me-in-production",
+    )
+    semester_start_date: str = os.getenv("SEMESTER_START_DATE", "2026-09-01")
+    iis_horizon_days: int = Field(
+        default=int(os.getenv("IIS_HORIZON_DAYS", "28")), ge=7, le=60
+    )
 
 
 settings = AppSettings()
