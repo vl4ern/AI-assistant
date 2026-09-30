@@ -1,7 +1,10 @@
 # OS / IDE
 .DS_Store
 .idea/
-.vscode/
+# IDE: настройки проекта раздаём всей команде, личное — игнорируем
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 
 # Python
 __pycache__/
