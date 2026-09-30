@@ -575,6 +575,7 @@ CI (`.github/workflows/ci.yml`) на каждый пуш и PR: pytest backend'�
 
 | Симптом | Причина и решение |
 |---|---|
+| `failed to resolve source metadata ... registry-1.docker.io: DNS/i-o timeout` | Docker Hub недоступен из сети: проверьте DNS (`nslookup registry-1.docker.io 8.8.8.8`; при проблеме — `nameserver 8.8.8.8` в `/etc/resolv.conf`), либо добавьте зеркало в Docker Engine: `"registry-mirrors": ["https://mirror.gcr.io"]`, либо запустите без Docker (`make api-dev` + `make web-dev` — in-memory фолбэк работает без Postgres) |
 | `Bind for 0.0.0.0:8000 failed: port is already allocated` | порт занят (проверьте `docker ps`, `ss -tlnp \| grep :8000`) → `API_PORT=8010` в `.env` |
 | Фронт пустой, «Не удалось загрузить...» | фронт не видит API: проверьте `VITE_API_URL` и что API отвечает на `/health` |
 | Расписание пустое | нет `IIS_GROUP_NUMBER` в `.env` или нет доступа к порталу → кнопка «Загрузить из файла» или добавить группу и перезапустить |
