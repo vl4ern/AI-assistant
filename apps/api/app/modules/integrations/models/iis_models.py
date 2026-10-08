@@ -278,12 +278,17 @@ class IisScheduleItem:
         return "\n".join(desc_parts)
 
     def _title(self) -> str:
-        return (
-            self.subject
-            or self.subjectFullName
-            or self.lessonTypeAbbrev
-            or "Без названия"
-        )
+        # У анонсов (консультации и т.п.) нет предмета — берём примечание,
+        # иначе пользователь видит бессмысленное «Без названия».
+        if self.subject:
+            return self.subject
+        if self.subjectFullName:
+            return self.subjectFullName
+        if self.note:
+            return self.note[:100]
+        if self.lessonTypeAbbrev:
+            return self.lessonTypeAbbrev
+        return "Занятие"
 
     def _duration_minutes(self) -> int:
         try:
@@ -348,6 +353,6 @@ class IisScheduleItem:
             due_date=due_date,
             duration_minutes=self._duration_minutes(),
             labels=[self.lessonTypeAbbrev],
-            version=2,
+            version=3,  # v3: названия анонсов из примечания; повышение версии обновляет старые кэши
             # остальные поля оставим по умолчанию
         )

@@ -104,6 +104,15 @@ class SQLiteCacheStorage(ICacheStorage):
             conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         return True
 
+    def delete_tasks_before(self, cutoff: datetime) -> int:
+        """Удаляет задачи с датой раньше cutoff. Возвращает число удалённых."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "DELETE FROM tasks WHERE due_date IS NOT NULL AND due_date < ?",
+                (cutoff.isoformat(),),
+            )
+            return cursor.rowcount
+
     def get_all_tasks(self) -> List[Task]:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute("SELECT data FROM tasks")

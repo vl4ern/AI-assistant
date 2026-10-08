@@ -35,6 +35,7 @@ class SyncResult:
     conflicts_detected: int = 0
     errors: List[str] = field(default_factory=list)
     sync_duration_ms: int = 0
+    seen_external_ids: List[str] = field(default_factory=list)
 
 
 @dataclass

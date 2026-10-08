@@ -147,6 +147,7 @@ class SyncScheduler:
         remote_tasks = adapter.fetch_changes(since)
 
         for remote_task in remote_tasks:
+            result.seen_external_ids.append(remote_task.external_id)
             local_task = self.cache.get_task_by_external_id(
                 remote_task.external_id, remote_task.source_type.value
             )

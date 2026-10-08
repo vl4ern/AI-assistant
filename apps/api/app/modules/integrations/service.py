@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from app.modules.integrations.integration.cache_storage import SQLiteCacheStorage
 from app.modules.integrations.integration.conflict_resolver import ConflictResolver
@@ -165,12 +165,38 @@ class IntegrationService:
         return statuses
 
     def list_lessons(self) -> list[Lesson]:
-        """Возвращает занятия из кэша синхронизации в виде расписания."""
+        """
+        Возвращает занятия из кэша синхронизации в виде расписания.
+
+        Прошедшие появления не показываем, а появления с одинаковым
+        естественным ключом (дата, время, предмет, аудитория, подгруппа)
+        сворачиваем в одно — портал иногда правит записи (например, список
+        недель), от чего меняется идентификатор и старая копия зависает
+        в кэше дублем.
+        """
+        today_start = datetime.combine(date.today(), time.min)
         lessons: list[Lesson] = []
+        seen_keys: set[tuple] = set()
+
         for task in self._scheduler.cache.get_all_tasks():
             if task.source_type != SourceType.IIS:
                 continue
-            lessons.append(self._task_to_lesson(task))
+            if task.due_date is not None and task.due_date < today_start:
+                continue
+
+            lesson = self._task_to_lesson(task)
+            key = (
+                task.due_date,
+                lesson.start_time,
+                lesson.subject,
+                lesson.auditory,
+                lesson.subgroup,
+            )
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            lessons.append(lesson)
+
         lessons.sort(
             key=lambda lesson: (DAY_ORDER.get(lesson.day_of_week or "", 7), lesson.start_time)
         )
@@ -215,6 +241,8 @@ class IntegrationService:
 
     def sync_all(self) -> IntegrationSyncResult:
         result = self._scheduler.sync_all()
+        self._purge_past_occurrences()
+        self._reconcile_stale_occurrences(set(result.seen_external_ids))
         return self._to_sync_result("all", result)
 
     def sync_adapter(self, adapter_name: str) -> IntegrationSyncResult:
@@ -225,7 +253,60 @@ class IntegrationService:
         if result is None:
             raise ValueError(f"Adapter '{adapter_name}' not found")
 
+        self._purge_past_occurrences()
+        # Реконсиляция — только по данным IIS: они авторитетны для расписания.
+        # Синк другого адаптера не должен затирать занятия.
+        if adapter_name == "IIS":
+            self._reconcile_stale_occurrences(set(result.seen_external_ids))
         return self._to_sync_result(adapter_name, result)
+
+    def _reconcile_stale_occurrences(self, keep_external_ids: set[str]) -> None:
+        """
+        Удаляет «осиротевшие» появления с будущими датами.
+
+        Если портал правит запись (недели, название), меняется её
+        идентификатор, и старая копия зависает в кэше дублем. После
+        синхронизации IIS его данные авторитетны: всё будущие появления,
+        которых не было в ответе портала, — мусор. Прошедшие не трогаем
+        (их чистит отдельная уборка), импорт без IIS-адаптера тоже
+        не попадает под реконсиляцию.
+        """
+        if "IIS" not in self._scheduler.adapters or not keep_external_ids:
+            return
+
+        today_start = datetime.combine(date.today(), time.min)
+        cache = self._scheduler.cache
+        stale = [
+            task
+            for task in cache.get_all_tasks()
+            if task.source_type == SourceType.IIS
+            and task.external_id not in keep_external_ids
+            and task.due_date is not None
+            and task.due_date >= today_start
+        ]
+        for task in stale:
+            cache.delete_task(task.id)
+        if stale:
+            print(f"[Integrations] Удалено устаревших появлений: {len(stale)}")
+
+    def _purge_past_occurrences(self) -> None:
+        """
+        Чистит из кэша появления занятий с прошедшими датами.
+
+        Без чистки кэш копит появления каждой синхронизации, и в недельном
+        виде одна и та же пара показывается несколько раз (прошедший цикл +
+        будущий). Чистим после синхронизации: дедупликация по external_id
+        уже отработала, а новые появления с портала всегда начинаются
+        с сегодняшнего дня.
+        """
+        purge_method = getattr(self._scheduler.cache, "delete_tasks_before", None)
+        if purge_method is None:
+            return
+
+        cutoff = datetime.combine(date.today(), time.min)
+        removed = purge_method(cutoff)
+        if removed:
+            print(f"[Integrations] Из кэша удалено прошедших появлений: {removed}")
 
     def get_week_info(self) -> WeekInfo:
         """Текущая учебная неделя (1–4) по дате начала семестра."""
