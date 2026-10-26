@@ -5,14 +5,14 @@ import { getCurrentUser, login as loginApi, register as registerApi } from './ap
 import type { AuthUser } from './api/auth';
 import { getEvents, createEvent as createEventApi } from './api/events';
 import type { ApiEvent } from './api/events';
-import { getLessons, getWeekInfo, importSchedule, syncIntegration } from './api/integrations';
+import { getLessons, getWeekInfo, importSchedule, syncGroup, syncIntegration } from './api/integrations';
 import type { Lesson, WeekInfo } from './api/integrations';
 import { rebuildSchedule } from './api/schedule';
 import type { SchedulePlan } from './api/schedule';
 import { createTask as createTaskApi, getTasks, updateTaskStatus } from './api/tasks';
 import type { ApiTask, ApiTaskStatus } from './types/api';
 
-type Page = 'overview' | 'tasks' | 'timetable' | 'plan' | 'history';
+type Page = 'overview' | 'tasks' | 'timetable' | 'calendar' | 'plan' | 'history';
 
 const IDLE_TIMEOUT_MINUTES = 30;
 
@@ -20,6 +20,7 @@ const navItems: Array<{ id: Page; label: string }> = [
   { id: 'overview', label: 'Обзор' },
   { id: 'tasks', label: 'Задачи' },
   { id: 'timetable', label: 'Расписание' },
+  { id: 'calendar', label: 'Календарь' },
   { id: 'plan', label: 'План' },
   { id: 'history', label: 'История' },
 ];
@@ -240,6 +241,20 @@ function App() {
     }
   }
 
+  async function handleSyncGroup(group: string) {
+    try {
+      setIsLoading(true);
+      setError('');
+      const result = await syncGroup(group);
+      await refreshData();
+      setMessage(`Расписание группы ${result.provider} загружено: занятий — ${result.synced_items}.`);
+    } catch (groupError) {
+      setError(`Не удалось загрузить расписание группы: ${getErrorMessage(groupError)}`);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
   async function handleBuildPlan() {
     try {
       setIsLoading(true);
@@ -340,6 +355,15 @@ function App() {
             isLoading={isLoading}
             onSync={() => void handleSyncTimetable()}
             onImport={(file) => void handleImportSchedule(file)}
+            onSyncGroup={(group) => void handleSyncGroup(group)}
+          />
+        )}
+
+        {activePage === 'calendar' && (
+          <CalendarPage
+            lessons={lessons}
+            tasks={tasks}
+            weekInfo={weekInfo}
           />
         )}
 
@@ -742,15 +766,18 @@ function TimetablePage({
   isLoading,
   onSync,
   onImport,
+  onSyncGroup,
 }: {
   lessons: Lesson[];
   weekInfo: WeekInfo | null;
   isLoading: boolean;
   onSync: () => void;
   onImport: (file: File) => void;
+  onSyncGroup: (group: string) => void;
 }) {
   const [selectedWeek, setSelectedWeek] = useState<number | 'all' | null>(null);
   const [subgroupFilter, setSubgroupFilter] = useState<'all' | 0 | 1 | 2>('all');
+  const [groupNumber, setGroupNumber] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // По умолчанию показываем текущую учебную неделю
@@ -794,12 +821,22 @@ function TimetablePage({
       byDay.set(day, []);
     }
     for (const lesson of visibleLessons) {
-      const day = lesson.day_of_week ?? 'Воскресенье';
+      // Без дня недели (экзамены, консультации) — не подмешиваем в воскресенье,
+      // собираем в отдельную секцию «По дате».
+      const day = lesson.day_of_week ?? '__by_date__';
       if (!byDay.has(day)) byDay.set(day, []);
       byDay.get(day)!.push(lesson);
     }
     return byDay;
   }, [visibleLessons]);
+
+  const datedLessons = useMemo(
+    () =>
+      (grouped.get('__by_date__') ?? [])
+        .slice()
+        .sort((a, b) => (a.next_date ?? '').localeCompare(b.next_date ?? '')),
+    [grouped]
+  );
 
   const hasLessons = visibleLessons.length > 0;
   const currentWeek = weekInfo?.current_week ?? null;
@@ -820,6 +857,22 @@ function TimetablePage({
           </p>
         </div>
         <div className="head-actions">
+          <div className="group-input">
+            <input
+              className="input"
+              value={groupNumber}
+              onChange={(event) => setGroupNumber(event.target.value)}
+              placeholder="Номер группы"
+              title="Введите номер группы — расписание загрузится с портала БГУИР"
+            />
+            <button
+              className="button"
+              disabled={isLoading || groupNumber.trim().length === 0}
+              onClick={() => onSyncGroup(groupNumber.trim())}
+            >
+              Загрузить группу
+            </button>
+          </div>
           <button className="button" disabled={isLoading} onClick={() => fileInputRef.current?.click()}>
             Загрузить из файла
           </button>
@@ -912,6 +965,275 @@ function TimetablePage({
           );
         })}
       </div>
+
+      {datedLessons.length > 0 && (
+        <div className="card">
+          <h3 className="card-title">Экзамены и события по датам</h3>
+          <p className="card-note">
+            Записи с конкретной датой: экзамены, консультации и объявления —
+            они не привязаны к дню недели.
+          </p>
+          <ul className="lesson-list dated">
+            {datedLessons.map((lesson) => (
+              <li key={lesson.id} className="lesson-row dated">
+                <span className="lesson-time">
+                  {(lesson.next_date ?? '').slice(8, 10)}.{(lesson.next_date ?? '').slice(5, 7)}
+                </span>
+                <div className="lesson-body">
+                  <strong className="lesson-subject">
+                    {lesson.subject}
+                    {lesson.subgroup > 0 && (
+                      <span className={`subgroup-badge ${lesson.subgroup === 1 ? 's1' : 's2'}`}>
+                        {lesson.subgroup} подгр.
+                      </span>
+                    )}
+                  </strong>
+                  <span className="lesson-meta">
+                    {[
+                      lesson.next_date ? formatClock(lesson.next_date) : null,
+                      (lessonTypeLabels[lesson.lesson_type] ?? null) || (lesson.lesson_type || null),
+                      lesson.auditory && `ауд. ${lesson.auditory}`,
+                      lesson.teacher,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function academicWeekOf(dateISO: string, semesterStartISO: string | null | undefined): number | null {
+  if (!semesterStartISO) return null;
+  const day = new Date(`${dateISO}T00:00:00`);
+  const start = new Date(`${semesterStartISO.slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(day.getTime()) || Number.isNaN(start.getTime())) return null;
+  const diffDays = Math.floor((day.getTime() - start.getTime()) / 86_400_000);
+  if (diffDays < 0) return 1;
+  return (Math.floor(diffDays / 7) % 4) + 1;
+}
+
+function CalendarPage({
+  lessons,
+  tasks,
+  weekInfo,
+}: {
+  lessons: Lesson[];
+  tasks: ApiTask[];
+  weekInfo: WeekInfo | null;
+}) {
+  const now = new Date();
+  const [monthCursor, setMonthCursor] = useState(new Date(now.getFullYear(), now.getMonth(), 1));
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+
+  const days = useMemo(() => {
+    const year = monthCursor.getFullYear();
+    const month = monthCursor.getMonth();
+    const first = new Date(year, month, 1);
+    const mondayOffset = (first.getDay() + 6) % 7;
+    const result: Date[] = [];
+    const start = new Date(year, month, 1 - mondayOffset);
+    for (let i = 0; i < 42; i += 1) {
+      const day = new Date(start);
+      day.setDate(start.getDate() + i);
+      result.push(day);
+    }
+    return result;
+  }, [monthCursor]);
+
+  const byDate = useMemo(() => {
+    const lessonsByDate = new Map<string, Lesson[]>();
+    for (const lesson of lessons) {
+      const key = (lesson.next_date ?? '').slice(0, 10);
+      if (!key) continue;
+      if (!lessonsByDate.has(key)) lessonsByDate.set(key, []);
+      lessonsByDate.get(key)!.push(lesson);
+    }
+
+    const plannedByDate = new Map<string, ApiTask[]>();
+    const deadlinesByDate = new Map<string, ApiTask[]>();
+    for (const task of tasks) {
+      if (task.status === 'cancelled') continue;
+      if (task.scheduled_start) {
+        const key = task.scheduled_start.slice(0, 10);
+        if (!plannedByDate.has(key)) plannedByDate.set(key, []);
+        plannedByDate.get(key)!.push(task);
+      }
+      if (task.deadline) {
+        const key = task.deadline.slice(0, 10);
+        if (!deadlinesByDate.has(key)) deadlinesByDate.set(key, []);
+        deadlinesByDate.get(key)!.push(task);
+      }
+    }
+    return { lessonsByDate, plannedByDate, deadlinesByDate };
+  }, [lessons, tasks]);
+
+  const monthTitle = monthCursor.toLocaleDateString('ru-RU', {
+    month: 'long',
+    year: 'numeric',
+  });
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const cursorMonth = monthCursor.getMonth();
+
+  const selected = selectedDate
+    ? {
+        lessons: byDate.lessonsByDate.get(selectedDate) ?? [],
+        planned: byDate.plannedByDate.get(selectedDate) ?? [],
+        deadlines: byDate.deadlinesByDate.get(selectedDate) ?? [],
+      }
+    : null;
+
+  return (
+    <section className="page">
+      <div className="page-head">
+        <div>
+          <h1 className="page-title">Календарь</h1>
+          <p className="page-subtitle">
+            Месяц целиком: расписание университета, запланированные задачи и дедлайны.
+            Нажмите на день, чтобы раскрыть подробности.
+          </p>
+        </div>
+        <div className="month-nav">
+          <button
+            className="button small"
+            onClick={() => setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() - 1, 1))}
+          >
+            ←
+          </button>
+          <span className="month-title">{monthTitle}</span>
+          <button
+            className="button small"
+            onClick={() => setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1))}
+          >
+            →
+          </button>
+        </div>
+      </div>
+
+      <div className="month-grid">
+        {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((weekday) => (
+          <div key={weekday} className="month-weekday">{weekday}</div>
+        ))}
+
+        {days.map((day) => {
+          const iso = day.toISOString().slice(0, 10);
+          const isoLocal = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+          const outside = day.getMonth() !== cursorMonth;
+          const week = academicWeekOf(isoLocal, weekInfo?.semester_start);
+          const dayLessons = byDate.lessonsByDate.get(isoLocal) ?? [];
+          const dayPlanned = byDate.plannedByDate.get(isoLocal) ?? [];
+          const dayDeadlines = byDate.deadlinesByDate.get(isoLocal) ?? [];
+
+          return (
+            <button
+              key={iso}
+              className={[
+                'cal-cell',
+                outside ? 'outside' : '',
+                isoLocal === todayISO ? 'today' : '',
+                selectedDate === isoLocal ? 'selected' : '',
+                dayLessons.length + dayPlanned.length + dayDeadlines.length > 0 ? 'has-items' : '',
+              ].filter(Boolean).join(' ')}
+              onClick={() => setSelectedDate(selectedDate === isoLocal ? null : isoLocal)}
+            >
+              <span className="cal-top">
+                {week !== null && <span className="cal-week-badge">{week} нед.</span>}
+                <span className="cal-day-num">{day.getDate()}</span>
+              </span>
+
+              {(dayLessons.length > 0 || dayPlanned.length > 0 || dayDeadlines.length > 0) && (
+                <span className="cal-summary">
+                  {dayLessons.length > 0 && <span>{dayLessons.length} пар{dayLessons.length === 1 ? 'а' : dayLessons.length < 5 ? 'ы' : ''}</span>}
+                  {dayPlanned.length > 0 && <span>{dayPlanned.length} зад.</span>}
+                  {dayDeadlines.length > 0 && <span className="has-deadline">{dayDeadlines.length} дедл.</span>}
+                </span>
+              )}
+              {dayLessons.length > 0 && (
+                <span className="cal-hint">{dayLessons[0].subject}</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {selected && (
+        <div className="cal-detail card">
+          <div className="cal-detail-head">
+            <strong className="cal-detail-day">{Number(selectedDate!.slice(8, 10))}</strong>
+            <div className="cal-detail-sub">
+              <span className="cal-detail-weekday">
+                {new Date(`${selectedDate}T00:00:00`).toLocaleDateString('ru-RU', { weekday: 'long' })}
+              </span>
+              <span className="cal-detail-month">
+                {new Date(`${selectedDate}T00:00:00`).toLocaleDateString('ru-RU', { month: 'long' })}
+                {(() => {
+                  const week = academicWeekOf(selectedDate!, weekInfo?.semester_start);
+                  return week !== null ? ` · учебная неделя ${week}` : '';
+                })()}
+              </span>
+            </div>
+          </div>
+
+          <div className="cal-section">
+            <h4 className="cal-section-title">Расписание университета</h4>
+            {selected.lessons.length === 0 ? (
+              <span className="cal-section-empty">пар нет</span>
+            ) : (
+              <ul className="lesson-list">
+                {selected.lessons
+                  .slice()
+                  .sort((a, b) => a.start_time.localeCompare(b.start_time))
+                  .map((lesson) => (
+                    <LessonRow key={lesson.id} lesson={lesson} />
+                  ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="cal-section">
+            <h4 className="cal-section-title">Личные задачи</h4>
+            {selected.planned.length === 0 ? (
+              <span className="cal-section-empty">запланированных задач нет</span>
+            ) : (
+              <ul className="task-list">
+                {selected.planned.map((task) => (
+                  <li key={task.id} className="task-row">
+                    <div className="task-main">
+                      <strong>{task.title}</strong>
+                      <span className="task-meta">
+                        {formatClock(task.scheduled_start)} — {formatClock(task.scheduled_end)}
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="cal-section">
+            <h4 className="cal-section-title">Дедлайны</h4>
+            {selected.deadlines.length === 0 ? (
+              <span className="cal-section-empty">дедлайнов нет</span>
+            ) : (
+              <ul className="task-list">
+                {selected.deadlines.map((task) => (
+                  <li key={task.id} className="task-row deadline">
+                    <div className="task-main">
+                      <strong>{task.title}</strong>
+                      <span className="task-meta">до {formatClock(task.deadline)}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
     </section>
   );
 }

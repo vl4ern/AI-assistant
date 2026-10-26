@@ -42,6 +42,16 @@ def import_schedule(data: dict[str, Any]) -> IntegrationSyncResult:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/sync-group", response_model=IntegrationSyncResult)
+def sync_group(data: dict[str, Any]) -> IntegrationSyncResult:
+    """Синхронизация расписания группы, введённой пользователем ({"group_number": "..."})."""
+    group_number = str(data.get("group_number", "") or "")
+    try:
+        return container.integration_service.sync_group(group_number)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/sync", response_model=IntegrationSyncResult)
 def sync_all_integrations() -> IntegrationSyncResult:
     return container.integration_service.sync_all()

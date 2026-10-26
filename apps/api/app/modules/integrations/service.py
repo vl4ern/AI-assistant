@@ -347,7 +347,42 @@ class IntegrationService:
         if result is None:
             result = SyncResult(success=False, errors=["Импорт не выполнен"])
 
+        self._purge_past_occurrences()
         return self._to_sync_result("import", result)
+
+    def sync_group(self, group_number: str) -> IntegrationSyncResult:
+        """
+        Синхронизация расписания группы, введённой пользователем.
+
+        Группа из настроек — лишь значение по умолчанию: пользователь может
+        ввести свой номер группы в интерфейсе, и расписание загрузится с
+        портала для неё. Введённая группа запоминается и для фоновых
+        синхронизаций.
+        """
+        from app.modules.integrations.integration.adapters.iis_adapter import IisAdapter
+
+        group = group_number.strip()
+        if not group:
+            raise ValueError("Укажите номер группы")
+
+        adapter = IisAdapter(
+            group,
+            semester_start=self._semester_start,
+            horizon_days=self._horizon_days,
+        )
+
+        # Группа становится текущей и для фоновых синхронизаций
+        self._scheduler.register_adapter(
+            "IIS", adapter, sync_interval=IIS_SYNC_INTERVAL_SECONDS
+        )
+        result = self._scheduler.sync_adapter_now("IIS")
+        if result is None:
+            result = SyncResult(success=False, errors=["Синхронизация не выполнена"])
+
+        self._purge_past_occurrences()
+        # Данные этой группы авторитетны: прошлую группу вычищаем
+        self._reconcile_stale_occurrences(set(result.seen_external_ids))
+        return self._to_sync_result(group, result)
 
     def start_background(self, check_interval: int = 30) -> None:
         self._scheduler.start_background(check_interval=check_interval)

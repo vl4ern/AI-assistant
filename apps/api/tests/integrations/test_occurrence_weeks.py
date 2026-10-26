@@ -391,3 +391,71 @@ def test_sync_reconciles_orphaned_future_occurrences(tmp_path: Path) -> None:
     titles = {lesson.subject for lesson in service.list_lessons()}
     assert "Устаревшая пара" not in titles
     assert "Живая пара" in titles
+
+
+def test_sync_group_updates_registered_adapter(tmp_path: Path, monkeypatch) -> None:
+    """Ввод группы пользователем: синхронизация по ней и запоминание
+    для фоновых запусков; старые данные другой группы вычищаются."""
+    from datetime import datetime, timedelta
+
+    from app.modules.integrations.integration.adapters import iis_adapter as iis_module
+    from app.modules.integrations.integration.interfaces import IServiceAdapter
+    from app.modules.integrations.models.task import SourceType, Task
+
+    kb = KnowledgeService(repository=InMemoryKnowledgeRepository())
+    service = IntegrationService(
+        knowledge_service=kb,
+        cache_path=str(tmp_path / "integration_cache.db"),
+        semester_start_date="2026-09-01",
+        iis_group_number="421701",
+    )
+
+    other_group_task = Task(
+        id="stale-group",
+        external_id="from-old-group",
+        source_type=SourceType.IIS,
+        title="Пара старой группы",
+        due_date=datetime.now() + timedelta(days=1),
+        duration_minutes=90,
+    )
+    service._scheduler.cache.save_task(other_group_task)
+
+    new_group_task = Task(
+        id="new-group",
+        external_id="from-new-group",
+        source_type=SourceType.IIS,
+        title="Пара новой группы",
+        due_date=datetime.now() + timedelta(days=2),
+        duration_minutes=90,
+    )
+
+    def fake_fetch(self, since=None):
+        return [new_group_task]
+
+    monkeypatch.setattr(iis_module.IisAdapter, "fetch_changes", fake_fetch)
+
+    result = service.sync_group("012345")
+
+    assert result.status == "ok"
+    # адаптер IIS теперь синхронизирует новую группу
+    assert service._scheduler.adapters["IIS"].group_number == "012345"
+    # занятия старой группы вычищены реконсиляцией
+    titles = {lesson.subject for lesson in service.list_lessons()}
+    assert "Пара старой группы" not in titles
+    assert "Пара новой группы" in titles
+
+
+def test_sync_group_rejects_empty() -> None:
+    from app.modules.knowledge.in_memory_repository import InMemoryKnowledgeRepository
+    from app.modules.knowledge.service import KnowledgeService
+
+    kb = KnowledgeService(repository=InMemoryKnowledgeRepository())
+    service = IntegrationService(
+        knowledge_service=kb,
+        cache_path="/tmp/opencode/test_empty_group.db",
+        semester_start_date="2026-09-01",
+    )
+    import pytest
+
+    with pytest.raises(ValueError):
+        service.sync_group("   ")

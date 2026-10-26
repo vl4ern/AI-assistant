@@ -64,3 +64,10 @@ export function syncIntegration(providerName: string): Promise<IntegrationSyncRe
     method: 'POST',
   });
 }
+
+export function syncGroup(groupNumber: string): Promise<IntegrationSyncResult> {
+  return apiRequest<IntegrationSyncResult>('/v1/integrations/sync-group', {
+    method: 'POST',
+    body: JSON.stringify({ group_number: groupNumber }),
+  });
+}
