@@ -1,8 +1,13 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 from enum import Enum
 from .task import Task, SourceType
+
+
+def utc_now() -> datetime:
+    """Единая точка получения текущего времени (aware UTC)."""
+    return datetime.now(timezone.utc)
 
 
 class ConflictResolutionStrategy(Enum):
@@ -48,7 +53,7 @@ class ConflictNotification:
     remote_version: int
     conflicting_fields: List[str]
     suggested_resolution: str
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=utc_now)
 
     def send(self) -> None:
         """Отправка уведомления пользователю"""

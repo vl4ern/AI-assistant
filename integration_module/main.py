@@ -9,7 +9,9 @@ from integration.retry_queue import RetryQueue
 from integration.adapters.iis_adapter import IisAdapter
 from integration.adapters.google_calendar_adapter import GoogleCalendarAdapter
 from integration.api import start_api_server
-
+from models.task import SourceType
+from integration.config_store import ConfigStore
+import os
 
 def main():
     print("=" * 50)
@@ -17,14 +19,22 @@ def main():
     print("=" * 50)
 
     # Инициализация компонентов
+    config = ConfigStore("config.json")
+    group = os.environ.get("IIS_GROUP") or config.get("iis_group") or "421701"
     cache = SQLiteCacheStorage("schedule_cache.db")
     resolver = ConflictResolver(cache)
     retry_queue = RetryQueue()
+    # --- после создания scheduler ---
     scheduler = SyncScheduler(cache, resolver, retry_queue)
+    retry_queue.set_sync_callback(
+        lambda name: scheduler.sync_adapter_now(name) is not None
+    )
+    def on_group_change(old_group: str, new_group: str):
+        config.set("iis_group", new_group)
 
     # Регистрируем адаптер IIS (расписание БГУИР) - каждые 2 часа
-    iis_adapter = IisAdapter(group_number="421701")
-    scheduler.register_adapter("IIS", iis_adapter, sync_interval=7200)
+    iis_adapter = IisAdapter(group_number=group, on_group_change=on_group_change)
+    scheduler.register_adapter(SourceType.IIS.value, iis_adapter, sync_interval=120)
     print("[Main] Адаптер IIS зарегистрирован")
 
     # Регистрируем адаптер Google Calendar - каждые 15 минут
@@ -33,7 +43,9 @@ def main():
             credentials_file="credentials.json", token_file="google_token.pickle"
         )
         if gc_adapter.authenticate():
-            scheduler.register_adapter("GoogleCalendar", gc_adapter, sync_interval=900)
+            scheduler.register_adapter(
+                SourceType.GOOGLE_CALENDAR.value, gc_adapter, sync_interval=30
+            )
             print("[Main] Адаптер Google Calendar зарегистрирован")
         else:
             print("[Main] Ошибка аутентификации Google Calendar")
@@ -47,7 +59,8 @@ def main():
     # Graceful shutdown
     def signal_handler(sig, frame):
         print("\n[Main] Завершение работы...")
-        scheduler.stop_background()
+        if scheduler._running:
+            scheduler.stop_background()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
