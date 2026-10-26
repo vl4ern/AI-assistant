@@ -58,6 +58,36 @@ docker compose up -d --build
 
 Останов: `docker compose down`. Стирание данных: `docker compose down -v`.
 
+### Шпаргалка по перезапуску (сохрани себе)
+
+```bash
+cd ~/projects/AI-assistant
+
+# 1. Если Docker-демон не запущен (после перезагрузки с выключенным автостартом)
+sudo systemctl start docker
+
+# 2. Проверить .env (после `cp .env.example .env` всегда заново!)
+#    API_PORT=8010, VITE_API_URL=http://localhost:8010, IIS_GROUP_NUMBER=421701
+grep -E "API_PORT|IIS_GROUP" .env
+
+# 3. Перезапустить проект целиком
+docker compose down && docker compose up -d --build
+
+# 4. Проверить, что всё живо
+docker compose ps                       # все три контейнера должны быть Up
+curl --noproxy '*' http://localhost:8010/health   # {"status":"ok",...}
+# интерфейс: http://localhost:5173
+
+# Полезное:
+docker compose logs api --tail 30       # логи backend
+docker compose restart api             # перезапустить только API
+docker compose down                    # остановить проект
+```
+
+Важно: в сети БГУИР трафик идёт через прокси — запросы к localhost из
+терминала делайте с `--noproxy '*'`, иначе curl пойдёт через proxy.bsuir.by.
+Сборка через медленный прокси может занимать до 10–15 минут — это нормально.
+
 ### Локально без Docker
 
 ```bash

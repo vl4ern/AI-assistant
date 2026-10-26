@@ -3,7 +3,8 @@ FROM python:3.12-slim
 WORKDIR /app
 
 COPY apps/api/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# --timeout/--retries: устойчивость к медленным сетям (прокси кампуса)
+RUN pip install --no-cache-dir --timeout 180 --retries 10 -r requirements.txt
 
 COPY apps/api/app ./app
 COPY apps/api/tests ./tests
