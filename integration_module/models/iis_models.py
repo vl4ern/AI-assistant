@@ -131,6 +131,13 @@ class IisScheduleItem:
             return 90
         delta = (end.hour * 60 + end.minute) - (start.hour * 60 + start.minute)
         return max(delta, 0) or 90
+    
+    def _format_employee(self) -> str:
+        """Форматирует ФИО преподавателя."""
+        if not self.employees:
+            return ""
+        emp = self.employees[0]
+        return f"{emp.lastName} {emp.firstName} {emp.middleName}".strip()
 
     def _generate_external_id(self, group_number: str = "") -> str:
         base = (
