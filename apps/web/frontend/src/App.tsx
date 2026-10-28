@@ -5,53 +5,60 @@ import { getCurrentUser, login as loginApi, register as registerApi } from './ap
 import type { AuthUser } from './api/auth';
 import { getEvents, createEvent as createEventApi } from './api/events';
 import type { ApiEvent } from './api/events';
-import { getLessons, getWeekInfo, importSchedule, syncGroup, syncIntegration } from './api/integrations';
-import type { Lesson, WeekInfo } from './api/integrations';
+import {
+  getCurrentGroup,
+  getLessons,
+  getWeekInfo,
+  importScheduleFile,
+  syncGroup,
+  syncIntegration,
+} from './api/integrations';
+import type { CurrentGroupInfo, Lesson, WeekInfo } from './api/integrations';
 import { rebuildSchedule } from './api/schedule';
 import type { SchedulePlan } from './api/schedule';
 import { createTask as createTaskApi, getTasks, updateTaskStatus } from './api/tasks';
 import type { ApiTask, ApiTaskStatus } from './types/api';
+import { SettingsProvider } from './settings-provider';
+import { useSettings } from './settings';
+import type { TFunc } from './settings';
 
 type Page = 'overview' | 'tasks' | 'timetable' | 'calendar' | 'plan' | 'history';
 
 const IDLE_TIMEOUT_MINUTES = 30;
 
-const navItems: Array<{ id: Page; label: string }> = [
-  { id: 'overview', label: 'Обзор' },
-  { id: 'tasks', label: 'Задачи' },
-  { id: 'timetable', label: 'Расписание' },
-  { id: 'calendar', label: 'Календарь' },
-  { id: 'plan', label: 'План' },
-  { id: 'history', label: 'История' },
+const navItems: Array<{ id: Page; labelKey: string }> = [
+  { id: 'overview', labelKey: 'nav.overview' },
+  { id: 'tasks', labelKey: 'nav.tasks' },
+  { id: 'timetable', labelKey: 'nav.timetable' },
+  { id: 'calendar', labelKey: 'nav.calendar' },
+  { id: 'plan', labelKey: 'nav.plan' },
+  { id: 'history', labelKey: 'nav.history' },
 ];
 
 const WEEK_DAYS = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'];
+const WEEK_DAYS_SHORT = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
-const statusLabels: Record<ApiTaskStatus, string> = {
-  todo: 'К выполнению',
-  in_progress: 'В работе',
-  completed: 'Выполнено',
-  cancelled: 'Отменено',
-  blocked: 'Заблокировано',
+const statusLabelKeys: Record<ApiTaskStatus, string> = {
+  todo: 'status.todo',
+  in_progress: 'status.in_progress',
+  completed: 'status.completed',
+  cancelled: 'status.cancelled',
+  blocked: 'status.blocked',
 };
 
-const priorityLabels: Record<number, string> = {
-  1: 'Высокий',
-  2: 'Повышенный',
-  3: 'Обычный',
-  4: 'Низкий',
+const priorityLabelKeys: Record<number, string> = {
+  1: 'tasks.priority.1',
+  2: 'tasks.priority.2',
+  3: 'tasks.priority.3',
+  4: 'tasks.priority.4',
 };
 
-const lessonTypeLabels: Record<string, string> = {
-  ЛК: 'Лекция',
-  ПЗ: 'Практика',
-  ЛР: 'Лабораторная',
-};
+const XLSX_ACCEPT = '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
-function formatDateTime(value: string | null): string {
+function formatDateTime(value: string | null, locale: string): string {
   if (!value) return '—';
   const date = new Date(value);
-  return date.toLocaleString('ru-RU', {
+  return date.toLocaleString(locale, {
     day: 'numeric',
     month: 'short',
     hour: '2-digit',
@@ -59,21 +66,26 @@ function formatDateTime(value: string | null): string {
   });
 }
 
-function formatClock(value: string | null): string {
+function formatClock(value: string | null, locale: string): string {
   if (!value) return '—';
   const date = new Date(value);
-  return date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return date.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
 }
 
-function formatDeadline(value: string | null): string {
-  if (!value) return 'Без дедлайна';
+function formatDeadline(value: string | null, t: TFunc, locale: string): string {
+  if (!value) return t('task.noDeadline');
   const date = new Date(value);
   const today = new Date();
   const daysLeft = Math.ceil((date.getTime() - today.getTime()) / 86_400_000);
-  const base = date.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-  if (daysLeft < 0) return `${base} · просрочено`;
-  if (daysLeft === 0) return `${base} · сегодня`;
-  if (daysLeft === 1) return `${base} · завтра`;
+  const base = date.toLocaleString(locale, {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  if (daysLeft < 0) return `${base} · ${t('task.overdue')}`;
+  if (daysLeft === 0) return `${base} · ${t('task.today')}`;
+  if (daysLeft === 1) return `${base} · ${t('task.tomorrow')}`;
   return base;
 }
 
@@ -83,6 +95,15 @@ function getErrorMessage(error: unknown): string {
 }
 
 function App() {
+  return (
+    <SettingsProvider>
+      <AppInner />
+    </SettingsProvider>
+  );
+}
+
+function AppInner() {
+  const { t, locale } = useSettings();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [logoutNotice, setLogoutNotice] = useState('');
@@ -92,6 +113,7 @@ function App() {
   const [events, setEvents] = useState<ApiEvent[]>([]);
   const [lessons, setLessons] = useState<Lesson[]>([]);
   const [weekInfo, setWeekInfo] = useState<WeekInfo | null>(null);
+  const [currentGroup, setCurrentGroup] = useState<CurrentGroupInfo | null>(null);
   const [plan, setPlan] = useState<SchedulePlan | null>(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -120,16 +142,19 @@ function App() {
   const refreshData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [loadedTasks, loadedEvents, loadedLessons, loadedWeek] = await Promise.all([
-        getTasks(),
-        getEvents(),
-        getLessons().catch(() => []),
-        getWeekInfo().catch(() => null),
-      ]);
+      const [loadedTasks, loadedEvents, loadedLessons, loadedWeek, loadedGroup] =
+        await Promise.all([
+          getTasks(),
+          getEvents(),
+          getLessons().catch(() => []),
+          getWeekInfo().catch(() => null),
+          getCurrentGroup().catch(() => null),
+        ]);
       setTasks(loadedTasks);
       setEvents(loadedEvents);
       setLessons(loadedLessons);
       setWeekInfo(loadedWeek);
+      setCurrentGroup(loadedGroup);
     } catch (loadError) {
       setError(getErrorMessage(loadError));
     } finally {
@@ -163,6 +188,7 @@ function App() {
     setEvents([]);
     setLessons([]);
     setPlan(null);
+    setCurrentGroup(null);
     setLogoutNotice(notice);
   }
 
@@ -190,7 +216,7 @@ function App() {
     const interval = window.setInterval(() => {
       const idleMs = Date.now() - lastActivity;
       if (idleMs > IDLE_TIMEOUT_MINUTES * 60_000) {
-        handleLogout('Вы давно не были активны — войдите заново.');
+        handleLogout(t('notice.idle'));
       }
     }, 30_000);
 
@@ -200,7 +226,8 @@ function App() {
       });
       window.clearInterval(interval);
     };
-  }, [user]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, locale]);
 
   async function changeTaskStatus(taskId: string, status: ApiTaskStatus) {
     try {
@@ -217,25 +244,28 @@ function App() {
       setError('');
       await syncIntegration('IIS');
       await refreshData();
-      setMessage('Расписание обновлено.');
+      setMessage(t('timetable.updated'));
     } catch (syncError) {
-      setError(`Не удалось обновить расписание: ${getErrorMessage(syncError)}`);
+      setError(t('timetable.updateFailed', { error: getErrorMessage(syncError) }));
     } finally {
       setIsLoading(false);
     }
   }
 
-  async function handleImportSchedule(file: File) {
+  async function handleImportSchedule(file: File, groupNumber: string) {
     try {
       setIsLoading(true);
       setError('');
-      const text = await file.text();
-      const data: unknown = JSON.parse(text);
-      const result = await importSchedule(data);
+      const result = await importScheduleFile(file, groupNumber);
       await refreshData();
-      setMessage(`Файл загружен: занятий — ${result.synced_items}.`);
+      const provider = result.provider && result.provider !== 'import' ? result.provider : '';
+      setMessage(
+        provider
+          ? t('timetable.groupLoaded', { group: provider, count: result.synced_items })
+          : t('timetable.imported', { count: result.synced_items })
+      );
     } catch (importError) {
-      setError(`Не удалось загрузить файл: ${getErrorMessage(importError)}`);
+      setError(t('timetable.importFailed', { error: getErrorMessage(importError) }));
     } finally {
       setIsLoading(false);
     }
@@ -247,9 +277,11 @@ function App() {
       setError('');
       const result = await syncGroup(group);
       await refreshData();
-      setMessage(`Расписание группы ${result.provider} загружено: занятий — ${result.synced_items}.`);
+      setMessage(
+        t('timetable.groupLoaded', { group: result.provider, count: result.synced_items })
+      );
     } catch (groupError) {
-      setError(`Не удалось загрузить расписание группы: ${getErrorMessage(groupError)}`);
+      setError(t('timetable.groupFailed', { error: getErrorMessage(groupError) }));
     } finally {
       setIsLoading(false);
     }
@@ -261,16 +293,16 @@ function App() {
       setError('');
       const builtPlan = await rebuildSchedule();
       setPlan(builtPlan);
-      setMessage('План готов.');
+      setMessage(t('plan.ready'));
     } catch (planError) {
-      setError(`Не удалось построить план: ${getErrorMessage(planError)}`);
+      setError(t('plan.failed', { error: getErrorMessage(planError) }));
     } finally {
       setIsLoading(false);
     }
   }
 
   if (isAuthChecking) {
-    return <div className="auth-checking">Загрузка…</div>;
+    return <div className="auth-checking">{t('loading')}</div>;
   }
 
   if (!user) {
@@ -302,14 +334,15 @@ function App() {
                   setError('');
                 }}
               >
-                {item.label}
+                {t(item.labelKey)}
               </button>
             ))}
           </nav>
           <div className="user-box">
+            <SettingsGear />
             <span className="user-name">{user.username}</span>
             <button className="link-button" onClick={() => handleLogout()}>
-              Выйти
+              {t('action.logout')}
             </button>
           </div>
         </div>
@@ -352,19 +385,16 @@ function App() {
           <TimetablePage
             lessons={lessons}
             weekInfo={weekInfo}
+            currentGroup={currentGroup}
             isLoading={isLoading}
             onSync={() => void handleSyncTimetable()}
-            onImport={(file) => void handleImportSchedule(file)}
+            onImport={(file, group) => void handleImportSchedule(file, group)}
             onSyncGroup={(group) => void handleSyncGroup(group)}
           />
         )}
 
         {activePage === 'calendar' && (
-          <CalendarPage
-            lessons={lessons}
-            tasks={tasks}
-            weekInfo={weekInfo}
-          />
+          <CalendarPage lessons={lessons} tasks={tasks} weekInfo={weekInfo} />
         )}
 
         {activePage === 'plan' && (
@@ -388,7 +418,111 @@ function App() {
   );
 }
 
+function SettingsGear() {
+  const { t, theme, setTheme, lang, setLang, fontSize, setFontSize } = useSettings();
+  const [isOpen, setIsOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onDocClick = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [isOpen]);
+
+  return (
+    <div className="settings-root" ref={rootRef}>
+      <button
+        type="button"
+        className={`gear-button ${isOpen ? 'open' : ''}`}
+        title={t('settings.title')}
+        aria-label={t('settings.title')}
+        aria-expanded={isOpen}
+        onClick={() => setIsOpen((previous) => !previous)}
+      >
+        <svg
+          className="gear-icon"
+          viewBox="0 0 24 24"
+          width="18"
+          height="18"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58 c0.18-0.14,0.23-0.41,0.12-0.61l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81 c-0.04-0.24-0.24-0.41-0.48-0.41h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33 c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87C2.62,9.08,2.66,9.34,2.86,9.49l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12 s0.02,0.64,0.07,0.94l-2.03,1.58c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96 c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54 c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z" />
+        </svg>
+      </button>
+
+      {isOpen && (
+        <div className="settings-panel">
+          <h3 className="settings-panel-title">{t('settings.title')}</h3>
+
+          <div className="settings-section">
+            <span className="settings-label">{t('settings.theme')}</span>
+            <div className="settings-options">
+              <button
+                type="button"
+                className={`settings-chip ${theme === 'dark' ? 'active' : ''}`}
+                onClick={() => setTheme('dark')}
+              >
+                {t('settings.theme.dark')}
+              </button>
+              <button
+                type="button"
+                className={`settings-chip ${theme === 'light' ? 'active' : ''}`}
+                onClick={() => setTheme('light')}
+              >
+                {t('settings.theme.light')}
+              </button>
+            </div>
+          </div>
+
+          <div className="settings-section">
+            <span className="settings-label">{t('settings.language')}</span>
+            <div className="settings-options">
+              <button
+                type="button"
+                className={`settings-chip ${lang === 'ru' ? 'active' : ''}`}
+                onClick={() => setLang('ru')}
+              >
+                {t('settings.language.ru')}
+              </button>
+              <button
+                type="button"
+                className={`settings-chip ${lang === 'en' ? 'active' : ''}`}
+                onClick={() => setLang('en')}
+              >
+                {t('settings.language.en')}
+              </button>
+            </div>
+          </div>
+
+          <div className="settings-section">
+            <span className="settings-label">{t('settings.fontSize')}</span>
+            <div className="settings-options">
+              {(['sm', 'md', 'lg'] as const).map((size) => (
+                <button
+                  key={size}
+                  type="button"
+                  className={`settings-chip ${fontSize === size ? 'active' : ''}`}
+                  onClick={() => setFontSize(size)}
+                >
+                  {t(`settings.fontSize.${size}`)}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AuthScreen({ notice, onSuccess }: { notice?: string; onSuccess: (user: AuthUser) => void }) {
+  const { t } = useSettings();
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -422,7 +556,7 @@ function AuthScreen({ notice, onSuccess }: { notice?: string; onSuccess: (user: 
         }}
       >
         <div className="brand auth-brand">Ассистент</div>
-        <p className="auth-subtitle">Личные задачи, дедлайны и расписание в одном месте.</p>
+        <p className="auth-subtitle">{t('auth.subtitle')}</p>
 
         <div className="auth-tabs">
           <button
@@ -430,48 +564,52 @@ function AuthScreen({ notice, onSuccess }: { notice?: string; onSuccess: (user: 
             className={`auth-tab ${mode === 'login' ? 'active' : ''}`}
             onClick={() => setMode('login')}
           >
-            Вход
+            {t('auth.login')}
           </button>
           <button
             type="button"
             className={`auth-tab ${mode === 'register' ? 'active' : ''}`}
             onClick={() => setMode('register')}
           >
-            Регистрация
+            {t('auth.register')}
           </button>
         </div>
 
         <label className="field">
-          <span>Имя</span>
+          <span>{t('auth.name')}</span>
           <input
             className="input"
             value={username}
             onChange={(event) => setUsername(event.target.value)}
             autoComplete="username"
-            placeholder="Как вас зовут"
+            placeholder={t('auth.namePlaceholder')}
           />
         </label>
 
         <label className="field">
-          <span>Пароль</span>
+          <span>{t('auth.password')}</span>
           <input
             className="input"
             type="password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-            placeholder="Минимум 4 символа"
+            placeholder={t('auth.passwordPlaceholder')}
           />
         </label>
 
         {error && <div className="notice error">{error}</div>}
 
         <button className="button primary full" type="submit" disabled={isSubmitting}>
-          {isSubmitting ? 'Подождите…' : mode === 'login' ? 'Войти' : 'Создать аккаунт'}
+          {isSubmitting
+            ? t('auth.submitting')
+            : mode === 'login'
+              ? t('auth.submit.login')
+              : t('auth.submit.register')}
         </button>
 
         <p className="auth-hint">
-          Есть демо-аккаунт: <strong>demo / demo</strong>
+          {t('auth.demo')}: <strong>demo / demo</strong>
         </p>
       </form>
     </div>
@@ -509,7 +647,8 @@ function OverviewPage({
   onGoToTasks: () => void;
   onGoToTimetable: () => void;
 }) {
-  const dateToday = new Date().toLocaleDateString('ru-RU', {
+  const { t, locale } = useSettings();
+  const dateToday = new Date().toLocaleDateString(locale, {
     weekday: 'long',
     day: 'numeric',
     month: 'long',
@@ -517,23 +656,33 @@ function OverviewPage({
 
   return (
     <section className="page">
-      <h1 className="page-title">Привет, {username}</h1>
-      <p className="page-subtitle">Сегодня {dateToday}.</p>
+      <h1 className="page-title">{t('overview.hello', { name: username })}</h1>
+      <p className="page-subtitle">{t('overview.today', { date: dateToday })}</p>
 
       <div className="stats-row">
-        <StatCard label="Активные задачи" value={tasksCount} hint={overdueCount > 0 ? `Просрочено: ${overdueCount}` : 'Всё под контролем'} />
-        <StatCard label="Занятий сегодня" value={lessonsToday.length} />
-        <StatCard label="Запланировано" value={plan ? plan.slots.length : 0} hint="слотов в плане" />
+        <StatCard
+          label={t('overview.activeTasks')}
+          value={tasksCount}
+          hint={
+            overdueCount > 0 ? t('overview.overdue', { count: overdueCount }) : t('overview.allGood')
+          }
+        />
+        <StatCard label={t('overview.lessonsToday')} value={lessonsToday.length} />
+        <StatCard
+          label={t('overview.planned')}
+          value={plan ? plan.slots.length : 0}
+          hint={t('overview.slotsHint')}
+        />
       </div>
 
       <div className="two-columns">
         <div className="card">
-          <h3 className="card-title">Сегодня в расписании</h3>
+          <h3 className="card-title">{t('overview.todayLessons')}</h3>
           {lessonsToday.length === 0 ? (
             <div className="empty">
-              Занятий сегодня нет.
+              {t('overview.noLessons')}{' '}
               <button className="link-button" onClick={onGoToTimetable}>
-                Открыть расписание
+                {t('overview.openTimetable')}
               </button>
             </div>
           ) : (
@@ -546,12 +695,12 @@ function OverviewPage({
         </div>
 
         <div className="card">
-          <h3 className="card-title">Запланированные задачи</h3>
+          <h3 className="card-title">{t('overview.plannedTasks')}</h3>
           {todayTasks.length === 0 ? (
             <div className="empty">
-              План ещё не построен.
+              {t('overview.noPlan')}{' '}
               <button className="link-button" onClick={onGoToTasks}>
-                Добавить задачу
+                {t('overview.addTask')}
               </button>
             </div>
           ) : (
@@ -560,13 +709,16 @@ function OverviewPage({
                 <li key={task.id} className="task-row">
                   <div>
                     <strong>{task.title}</strong>
-                    <span className="task-meta">{formatClock(task.scheduled_start)} — {formatClock(task.scheduled_end)}</span>
+                    <span className="task-meta">
+                      {formatClock(task.scheduled_start, locale)} —{' '}
+                      {formatClock(task.scheduled_end, locale)}
+                    </span>
                   </div>
                 </li>
               ))}
             </ul>
           )}
-          {isLoading && <div className="empty">Обновляем…</div>}
+          {isLoading && <div className="empty">{t('state.updating')}</div>}
         </div>
       </div>
     </section>
@@ -574,6 +726,8 @@ function OverviewPage({
 }
 
 function LessonRow({ lesson, showWeeks = false }: { lesson: Lesson; showWeeks?: boolean }) {
+  const { t } = useSettings();
+
   return (
     <li className="lesson-row">
       <span className="lesson-time">
@@ -584,21 +738,25 @@ function LessonRow({ lesson, showWeeks = false }: { lesson: Lesson; showWeeks?: 
           {lesson.subject}
           {lesson.subgroup > 0 && (
             <span className={`subgroup-badge ${lesson.subgroup === 1 ? 's1' : 's2'}`}>
-              {lesson.subgroup} подгр.
+              {t('timetable.subgroupBadge', { n: lesson.subgroup })}
             </span>
           )}
         </strong>
         <span className="lesson-meta">
           {[
-            (lessonTypeLabels[lesson.lesson_type] ?? null) || (lesson.lesson_type || null),
-            lesson.auditory && `ауд. ${lesson.auditory}`,
+            t(`lesson.${lesson.lesson_type}`) !== `lesson.${lesson.lesson_type}`
+              ? t(`lesson.${lesson.lesson_type}`)
+              : lesson.lesson_type || null,
+            lesson.auditory && t('timetable.auditory', { auditory: lesson.auditory }),
             lesson.teacher,
           ]
             .filter(Boolean)
             .join(' · ')}
         </span>
         {showWeeks && lesson.week_numbers.length > 0 && (
-          <span className="lesson-weeks">недели: {lesson.week_numbers.join(', ')}</span>
+          <span className="lesson-weeks">
+            {t('timetable.weeks', { weeks: lesson.week_numbers.join(', ') })}
+          </span>
         )}
       </div>
     </li>
@@ -614,6 +772,7 @@ function TasksPage({
   onStatusChange: (taskId: string, status: ApiTaskStatus) => void;
   onCreate: (payload: { title: string; priority: number; estimated_minutes: number; deadline: string | null; description: string | null }) => Promise<void>;
 }) {
+  const { t, locale } = useSettings();
   const [title, setTitle] = useState('');
   const [priority, setPriority] = useState('3');
   const [estimate, setEstimate] = useState('60');
@@ -652,32 +811,32 @@ function TasksPage({
 
   return (
     <section className="page">
-      <h1 className="page-title">Задачи</h1>
-      <p className="page-subtitle">Ваши личные дедлайны и работы. Завершённые попадают в историю.</p>
+      <h1 className="page-title">{t('tasks.title')}</h1>
+      <p className="page-subtitle">{t('tasks.subtitle')}</p>
 
       <div className="card">
-        <h3 className="card-title">Новая задача</h3>
+        <h3 className="card-title">{t('tasks.new')}</h3>
         <div className="form-grid">
           <label className="field span-2">
-            <span>Что нужно сделать</span>
+            <span>{t('tasks.what')}</span>
             <input
               className="input"
               value={title}
               onChange={(event) => setTitle(event.target.value)}
-              placeholder="Например: доделать отчёт"
+              placeholder={t('tasks.whatPlaceholder')}
             />
           </label>
           <label className="field">
-            <span>Важность</span>
+            <span>{t('tasks.priority')}</span>
             <select className="input" value={priority} onChange={(event) => setPriority(event.target.value)}>
-              <option value="1">Высокая</option>
-              <option value="2">Повышенная</option>
-              <option value="3">Обычная</option>
-              <option value="4">Низкая</option>
+              <option value="1">{t('tasks.priority.1')}</option>
+              <option value="2">{t('tasks.priority.2')}</option>
+              <option value="3">{t('tasks.priority.3')}</option>
+              <option value="4">{t('tasks.priority.4')}</option>
             </select>
           </label>
           <label className="field">
-            <span>Оценка, минут</span>
+            <span>{t('tasks.estimate')}</span>
             <input
               className="input"
               type="number"
@@ -688,7 +847,7 @@ function TasksPage({
             />
           </label>
           <label className="field">
-            <span>Дедлайн — дата</span>
+            <span>{t('tasks.deadlineDate')}</span>
             <input
               className="input"
               type="date"
@@ -697,7 +856,7 @@ function TasksPage({
             />
           </label>
           <label className="field">
-            <span>Время</span>
+            <span>{t('tasks.time')}</span>
             <input
               className="input"
               type="time"
@@ -706,7 +865,7 @@ function TasksPage({
             />
           </label>
           <label className="field span-2">
-            <span>Заметка</span>
+            <span>{t('tasks.note')}</span>
             <textarea
               className="input"
               rows={2}
@@ -721,14 +880,14 @@ function TasksPage({
           disabled={isSubmitting || title.trim().length === 0}
           onClick={() => void handleCreate()}
         >
-          {isSubmitting ? 'Добавляем…' : 'Добавить задачу'}
+          {isSubmitting ? t('tasks.creating') : t('tasks.create')}
         </button>
       </div>
 
       <div className="card">
-        <h3 className="card-title">Активные · {activeTasks.length}</h3>
+        <h3 className="card-title">{t('tasks.active', { count: activeTasks.length })}</h3>
         {activeTasks.length === 0 ? (
-          <div className="empty">Пока нет активных задач — самое время отдохнуть.</div>
+          <div className="empty">{t('tasks.empty')}</div>
         ) : (
           <ul className="task-list">
             {activeTasks.map((task) => (
@@ -737,18 +896,19 @@ function TasksPage({
                   <strong>{task.title}</strong>
                   {task.description && <span className="task-description">{task.description}</span>}
                   <span className="task-meta">
-                    {formatDeadline(task.deadline)} · {priorityLabels[task.priority]} · ~{task.estimated_minutes} мин
+                    {formatDeadline(task.deadline, t, locale)} · {t(priorityLabelKeys[task.priority] ?? 'tasks.priority.3')} · ~
+                    {task.estimated_minutes} {t('task.minutes')}
                   </span>
                 </div>
                 <div className="task-actions">
                   <button className="button small success" onClick={() => onStatusChange(task.id, 'completed')}>
-                    Выполнено
+                    {t('tasks.complete')}
                   </button>
                   <button className="button small" onClick={() => onStatusChange(task.id, 'in_progress')}>
-                    В работу
+                    {t('tasks.start')}
                   </button>
                   <button className="button small" onClick={() => onStatusChange(task.id, 'cancelled')}>
-                    Отменить
+                    {t('tasks.cancel')}
                   </button>
                 </div>
               </li>
@@ -763,6 +923,7 @@ function TasksPage({
 function TimetablePage({
   lessons,
   weekInfo,
+  currentGroup,
   isLoading,
   onSync,
   onImport,
@@ -770,11 +931,13 @@ function TimetablePage({
 }: {
   lessons: Lesson[];
   weekInfo: WeekInfo | null;
+  currentGroup: CurrentGroupInfo | null;
   isLoading: boolean;
   onSync: () => void;
-  onImport: (file: File) => void;
+  onImport: (file: File, groupNumber: string) => void;
   onSyncGroup: (group: string) => void;
 }) {
+  const { t } = useSettings();
   const [selectedWeek, setSelectedWeek] = useState<number | 'all' | null>(null);
   const [subgroupFilter, setSubgroupFilter] = useState<'all' | 0 | 1 | 2>('all');
   const [groupNumber, setGroupNumber] = useState('');
@@ -840,20 +1003,21 @@ function TimetablePage({
 
   const hasLessons = visibleLessons.length > 0;
   const currentWeek = weekInfo?.current_week ?? null;
+  const groupName = currentGroup?.group_number ?? '';
 
   return (
     <section className="page">
       <div className="page-head">
         <div>
-          <h1 className="page-title">Расписание</h1>
+          <h1 className="page-title">{t('timetable.title')}</h1>
+          <p className="page-subtitle group-subtitle">
+            {groupName
+              ? t('timetable.group', { group: groupName })
+              : t('timetable.groupUnknown')}
+          </p>
           <p className="page-subtitle">
-            Занятия по учебным неделям.
-            {currentWeek && (
-              <>
-                {' '}
-                Сейчас <strong>неделя {currentWeek}</strong>.
-              </>
-            )}
+            {t('timetable.subtitle')}{' '}
+            {currentWeek && <>{t('timetable.weekNow', { week: currentWeek })}</>}
           </p>
         </div>
         <div className="head-actions">
@@ -862,32 +1026,37 @@ function TimetablePage({
               className="input"
               value={groupNumber}
               onChange={(event) => setGroupNumber(event.target.value)}
-              placeholder="Номер группы"
-              title="Введите номер группы — расписание загрузится с портала БГУИР"
+              placeholder={t('timetable.groupPlaceholder')}
+              title={t('timetable.groupHint')}
             />
             <button
               className="button"
               disabled={isLoading || groupNumber.trim().length === 0}
               onClick={() => onSyncGroup(groupNumber.trim())}
             >
-              Загрузить группу
+              {t('timetable.loadGroup')}
             </button>
           </div>
-          <button className="button" disabled={isLoading} onClick={() => fileInputRef.current?.click()}>
-            Загрузить из файла
+          <button
+            className="button"
+            disabled={isLoading}
+            onClick={() => fileInputRef.current?.click()}
+            title="XLSX"
+          >
+            {t('timetable.importFile')}
           </button>
           <button className="button primary" disabled={isLoading} onClick={onSync}>
-            {isLoading ? 'Обновляем…' : 'Обновить с портала'}
+            {isLoading ? t('timetable.syncing') : t('timetable.sync')}
           </button>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".json,application/json"
+            accept={XLSX_ACCEPT}
             style={{ display: 'none' }}
             onChange={(event) => {
               const file = event.target.files?.[0];
               if (file) {
-                onImport(file);
+                onImport(file, groupNumber.trim());
               }
               event.target.value = '';
             }}
@@ -902,42 +1071,37 @@ function TimetablePage({
             className={`week-chip ${effectiveWeek === week ? 'active' : ''}`}
             onClick={() => setSelectedWeek(week)}
           >
-            Неделя {week}
-            {currentWeek === week && <span className="chip-now">сейчас</span>}
+            {t('timetable.week', { week })}
+            {currentWeek === week && <span className="chip-now">{t('timetable.now')}</span>}
           </button>
         ))}
         <button
           className={`week-chip ${effectiveWeek === 'all' ? 'active' : ''}`}
           onClick={() => setSelectedWeek('all')}
         >
-          Все недели
+          {t('timetable.allWeeks')}
         </button>
       </div>
 
       <div className="subgroup-switcher">
-        <span className="switcher-label">Пары:</span>
+        <span className="switcher-label">{t('timetable.lessons')}</span>
         {([
-          ['all', 'Все'],
-          [0, 'Общие'],
-          [1, '1 подгруппа'],
-          [2, '2 подгруппа'],
-        ] as Array<['all' | 0 | 1 | 2, string]>).map(([value, label]) => (
+          ['all', 'timetable.subgroupAll'],
+          [0, 'timetable.subgroupCommon'],
+          [1, 'timetable.subgroup1'],
+          [2, 'timetable.subgroup2'],
+        ] as Array<['all' | 0 | 1 | 2, string]>).map(([value, labelKey]) => (
           <button
             key={String(value)}
             className={`subgroup-chip ${subgroupFilter === value ? 'active' : ''}`}
             onClick={() => setSubgroupFilter(value)}
           >
-            {label}
+            {t(labelKey)}
           </button>
         ))}
       </div>
 
-      {!hasLessons && (
-        <div className="empty card">
-          Расписание на выбранную неделю пустое. Можно обновить его с портала или
-          загрузить файл с расписанием группы.
-        </div>
-      )}
+      {!hasLessons && <div className="empty card">{t('timetable.empty')}</div>}
 
       <div className="week-grid">
         {WEEK_DAYS.map((day) => {
@@ -946,10 +1110,10 @@ function TimetablePage({
           return (
             <div key={day} className={`day-card ${isToday ? 'today' : ''} ${dayLessons.length === 0 ? 'empty-day' : ''}`}>
               <h4 className="day-name">
-                {day} {isToday && <span className="today-badge">сегодня</span>}
+                {t(`day.${day}`)} {isToday && <span className="today-badge">{t('timetable.today')}</span>}
               </h4>
               {dayLessons.length === 0 ? (
-                <span className="day-off">свободно</span>
+                <span className="day-off">{t('timetable.free')}</span>
               ) : (
                 <ul className="lesson-list">
                   {dayLessons.map((lesson) => (
@@ -968,38 +1132,11 @@ function TimetablePage({
 
       {datedLessons.length > 0 && (
         <div className="card">
-          <h3 className="card-title">Экзамены и события по датам</h3>
-          <p className="card-note">
-            Записи с конкретной датой: экзамены, консультации и объявления —
-            они не привязаны к дню недели.
-          </p>
+          <h3 className="card-title">{t('timetable.dated')}</h3>
+          <p className="card-note">{t('timetable.datedNote')}</p>
           <ul className="lesson-list dated">
             {datedLessons.map((lesson) => (
-              <li key={lesson.id} className="lesson-row dated">
-                <span className="lesson-time">
-                  {(lesson.next_date ?? '').slice(8, 10)}.{(lesson.next_date ?? '').slice(5, 7)}
-                </span>
-                <div className="lesson-body">
-                  <strong className="lesson-subject">
-                    {lesson.subject}
-                    {lesson.subgroup > 0 && (
-                      <span className={`subgroup-badge ${lesson.subgroup === 1 ? 's1' : 's2'}`}>
-                        {lesson.subgroup} подгр.
-                      </span>
-                    )}
-                  </strong>
-                  <span className="lesson-meta">
-                    {[
-                      lesson.next_date ? formatClock(lesson.next_date) : null,
-                      (lessonTypeLabels[lesson.lesson_type] ?? null) || (lesson.lesson_type || null),
-                      lesson.auditory && `ауд. ${lesson.auditory}`,
-                      lesson.teacher,
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')}
-                  </span>
-                </div>
-              </li>
+              <DatedLessonRow key={lesson.id} lesson={lesson} />
             ))}
           </ul>
         </div>
@@ -1008,11 +1145,49 @@ function TimetablePage({
   );
 }
 
+function DatedLessonRow({ lesson }: { lesson: Lesson }) {
+  const { t, locale } = useSettings();
+
+  return (
+    <li className="lesson-row dated">
+      <span className="lesson-time">
+        {(lesson.next_date ?? '').slice(8, 10)}.{(lesson.next_date ?? '').slice(5, 7)}
+      </span>
+      <div className="lesson-body">
+        <strong className="lesson-subject">
+          {lesson.subject}
+          {lesson.subgroup > 0 && (
+            <span className={`subgroup-badge ${lesson.subgroup === 1 ? 's1' : 's2'}`}>
+              {t('timetable.subgroupBadge', { n: lesson.subgroup })}
+            </span>
+          )}
+        </strong>
+        <span className="lesson-meta">
+          {[
+            lesson.next_date ? formatClock(lesson.next_date, locale) : null,
+            t(`lesson.${lesson.lesson_type}`) !== `lesson.${lesson.lesson_type}`
+              ? t(`lesson.${lesson.lesson_type}`)
+              : lesson.lesson_type || null,
+            lesson.auditory && t('timetable.auditory', { auditory: lesson.auditory }),
+            lesson.teacher,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
+        </span>
+      </div>
+    </li>
+  );
+}
+
 function academicWeekOf(dateISO: string, semesterStartISO: string | null | undefined): number | null {
   if (!semesterStartISO) return null;
   const day = new Date(`${dateISO}T00:00:00`);
   const start = new Date(`${semesterStartISO.slice(0, 10)}T00:00:00`);
   if (Number.isNaN(day.getTime()) || Number.isNaN(start.getTime())) return null;
+  // Учебные недели меняются по понедельникам: отсчёт от понедельника
+  // недели начала семестра, иначе понедельник попадал бы в прошлую неделю
+  const mondayOffset = (start.getDay() + 6) % 7;
+  start.setDate(start.getDate() - mondayOffset);
   const diffDays = Math.floor((day.getTime() - start.getTime()) / 86_400_000);
   if (diffDays < 0) return 1;
   return (Math.floor(diffDays / 7) % 4) + 1;
@@ -1027,6 +1202,7 @@ function CalendarPage({
   tasks: ApiTask[];
   weekInfo: WeekInfo | null;
 }) {
+  const { t, locale } = useSettings();
   const now = new Date();
   const [monthCursor, setMonthCursor] = useState(new Date(now.getFullYear(), now.getMonth(), 1));
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -1073,7 +1249,7 @@ function CalendarPage({
     return { lessonsByDate, plannedByDate, deadlinesByDate };
   }, [lessons, tasks]);
 
-  const monthTitle = monthCursor.toLocaleDateString('ru-RU', {
+  const monthTitle = monthCursor.toLocaleDateString(locale, {
     month: 'long',
     year: 'numeric',
   });
@@ -1092,10 +1268,9 @@ function CalendarPage({
     <section className="page">
       <div className="page-head">
         <div>
-          <h1 className="page-title">Календарь</h1>
+          <h1 className="page-title">{t('calendar.title')}</h1>
           <p className="page-subtitle">
-            Месяц целиком: расписание университета, запланированные задачи и дедлайны.
-            Нажмите на день, чтобы раскрыть подробности.
+            {t('calendar.subtitle')} {t('calendar.clickDay')}
           </p>
         </div>
         <div className="month-nav">
@@ -1116,8 +1291,8 @@ function CalendarPage({
       </div>
 
       <div className="month-grid">
-        {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((weekday) => (
-          <div key={weekday} className="month-weekday">{weekday}</div>
+        {WEEK_DAYS_SHORT.map((weekday) => (
+          <div key={weekday} className="month-weekday">{t(`dayShort.${weekday}`)}</div>
         ))}
 
         {days.map((day) => {
@@ -1142,20 +1317,32 @@ function CalendarPage({
               onClick={() => setSelectedDate(selectedDate === isoLocal ? null : isoLocal)}
             >
               <span className="cal-top">
-                {week !== null && <span className="cal-week-badge">{week} нед.</span>}
+                {week !== null && (
+                  <span className="cal-week-badge">{t('calendar.weekShort', { week })}</span>
+                )}
                 <span className="cal-day-num">{day.getDate()}</span>
               </span>
 
               {(dayLessons.length > 0 || dayPlanned.length > 0 || dayDeadlines.length > 0) && (
                 <span className="cal-summary">
-                  {dayLessons.length > 0 && <span>{dayLessons.length} пар{dayLessons.length === 1 ? 'а' : dayLessons.length < 5 ? 'ы' : ''}</span>}
-                  {dayPlanned.length > 0 && <span>{dayPlanned.length} зад.</span>}
-                  {dayDeadlines.length > 0 && <span className="has-deadline">{dayDeadlines.length} дедл.</span>}
+                  {dayLessons.length > 0 && (
+                    <span>
+                      {dayLessons.length === 1
+                        ? t('calendar.pair', { count: dayLessons.length })
+                        : t('calendar.pairs', { count: dayLessons.length })}
+                    </span>
+                  )}
+                  {dayPlanned.length > 0 && (
+                    <span>{t('calendar.tasksShort', { count: dayPlanned.length })}</span>
+                  )}
+                  {dayDeadlines.length > 0 && (
+                    <span className="has-deadline">
+                      {t('calendar.deadlinesShort', { count: dayDeadlines.length })}
+                    </span>
+                  )}
                 </span>
               )}
-              {dayLessons.length > 0 && (
-                <span className="cal-hint">{dayLessons[0].subject}</span>
-              )}
+              {dayLessons.length > 0 && <span className="cal-hint">{dayLessons[0].subject}</span>}
             </button>
           );
         })}
@@ -1167,22 +1354,22 @@ function CalendarPage({
             <strong className="cal-detail-day">{Number(selectedDate!.slice(8, 10))}</strong>
             <div className="cal-detail-sub">
               <span className="cal-detail-weekday">
-                {new Date(`${selectedDate}T00:00:00`).toLocaleDateString('ru-RU', { weekday: 'long' })}
+                {new Date(`${selectedDate}T00:00:00`).toLocaleDateString(locale, { weekday: 'long' })}
               </span>
               <span className="cal-detail-month">
-                {new Date(`${selectedDate}T00:00:00`).toLocaleDateString('ru-RU', { month: 'long' })}
+                {new Date(`${selectedDate}T00:00:00`).toLocaleDateString(locale, { month: 'long' })}
                 {(() => {
                   const week = academicWeekOf(selectedDate!, weekInfo?.semester_start);
-                  return week !== null ? ` · учебная неделя ${week}` : '';
+                  return week !== null ? ` · ${t('calendar.academicWeek', { week })}` : '';
                 })()}
               </span>
             </div>
           </div>
 
           <div className="cal-section">
-            <h4 className="cal-section-title">Расписание университета</h4>
+            <h4 className="cal-section-title">{t('calendar.university')}</h4>
             {selected.lessons.length === 0 ? (
-              <span className="cal-section-empty">пар нет</span>
+              <span className="cal-section-empty">{t('calendar.lessons')}</span>
             ) : (
               <ul className="lesson-list">
                 {selected.lessons
@@ -1196,9 +1383,9 @@ function CalendarPage({
           </div>
 
           <div className="cal-section">
-            <h4 className="cal-section-title">Личные задачи</h4>
+            <h4 className="cal-section-title">{t('calendar.personal')}</h4>
             {selected.planned.length === 0 ? (
-              <span className="cal-section-empty">запланированных задач нет</span>
+              <span className="cal-section-empty">{t('calendar.noPlanned')}</span>
             ) : (
               <ul className="task-list">
                 {selected.planned.map((task) => (
@@ -1206,7 +1393,8 @@ function CalendarPage({
                     <div className="task-main">
                       <strong>{task.title}</strong>
                       <span className="task-meta">
-                        {formatClock(task.scheduled_start)} — {formatClock(task.scheduled_end)}
+                        {formatClock(task.scheduled_start, locale)} —{' '}
+                        {formatClock(task.scheduled_end, locale)}
                       </span>
                     </div>
                   </li>
@@ -1216,16 +1404,18 @@ function CalendarPage({
           </div>
 
           <div className="cal-section">
-            <h4 className="cal-section-title">Дедлайны</h4>
+            <h4 className="cal-section-title">{t('calendar.deadlines')}</h4>
             {selected.deadlines.length === 0 ? (
-              <span className="cal-section-empty">дедлайнов нет</span>
+              <span className="cal-section-empty">{t('calendar.noDeadlines')}</span>
             ) : (
               <ul className="task-list">
                 {selected.deadlines.map((task) => (
                   <li key={task.id} className="task-row deadline">
                     <div className="task-main">
                       <strong>{task.title}</strong>
-                      <span className="task-meta">до {formatClock(task.deadline)}</span>
+                      <span className="task-meta">
+                        {formatClock(task.deadline, locale)}
+                      </span>
                     </div>
                   </li>
                 ))}
@@ -1251,6 +1441,7 @@ function PlanPage({
   onBuild: () => void;
   onCreateEvent: (payload: { title: string; start_at: string; end_at: string; source?: string }) => Promise<void>;
 }) {
+  const { t, locale } = useSettings();
   const [title, setTitle] = useState('');
   const [date, setDate] = useState('');
   const [startTime, setStartTime] = useState('');
@@ -1292,22 +1483,18 @@ function PlanPage({
     <section className="page">
       <div className="page-head">
         <div>
-          <h1 className="page-title">План</h1>
-          <p className="page-subtitle">
-            Ассистент раскладывает задачи по свободным окнам между занятиями и делами.
-          </p>
+          <h1 className="page-title">{t('plan.title')}</h1>
+          <p className="page-subtitle">{t('plan.subtitle')}</p>
         </div>
         <button className="button primary" disabled={isLoading} onClick={onBuild}>
-          {isLoading ? 'Строим…' : 'Построить план'}
+          {isLoading ? t('plan.building') : t('plan.build')}
         </button>
       </div>
 
       <div className="card">
-        <h3 className="card-title">План на ближайшие дни</h3>
-        {!plan && <div className="empty">Нажмите «Построить план» — подберём время для каждой задачи.</div>}
-        {plan && plan.slots.length === 0 && (
-          <div className="empty">Задач для планирования нет. Добавьте их на странице «Задачи».</div>
-        )}
+        <h3 className="card-title">{t('plan.upcoming')}</h3>
+        {!plan && <div className="empty">{t('plan.empty')}</div>}
+        {plan && plan.slots.length === 0 && <div className="empty">{t('plan.noTasks')}</div>}
         {plan && plan.slots.length > 0 && (
           <ul className="timeline">
             {plan.slots.map((slot) => (
@@ -1316,12 +1503,12 @@ function PlanPage({
                 className={`timeline-item ${slot.task_id === plan.prime_task_id ? 'prime' : ''}`}
               >
                 <span className="timeline-time">
-                  {formatDateTime(slot.start_at)} — {formatClock(slot.end_at)}
+                  {formatDateTime(slot.start_at, locale)} — {formatClock(slot.end_at, locale)}
                 </span>
                 <div className="timeline-body">
                   <strong>{slot.title}</strong>
                   {slot.task_id === plan.prime_task_id && (
-                    <span className="prime-badge">главная задача</span>
+                    <span className="prime-badge">{t('plan.prime')}</span>
                   )}
                 </div>
               </li>
@@ -1332,28 +1519,28 @@ function PlanPage({
 
       <div className="two-columns">
         <div className="card">
-          <h3 className="card-title">Добавить занятое время</h3>
-          <p className="card-note">Встречи, консультации, дорога — всё, что нельзя двигать.</p>
+          <h3 className="card-title">{t('plan.addBusy')}</h3>
+          <p className="card-note">{t('plan.busyNote')}</p>
           <div className="form-grid">
             <label className="field span-2">
-              <span>Название</span>
+              <span>{t('plan.name')}</span>
               <input
                 className="input"
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
-                placeholder="Например: консультация"
+                placeholder={t('plan.namePlaceholder')}
               />
             </label>
             <label className="field">
-              <span>Дата</span>
+              <span>{t('plan.date')}</span>
               <input className="input" type="date" value={date} onChange={(event) => setDate(event.target.value)} />
             </label>
             <label className="field">
-              <span>Начало</span>
+              <span>{t('plan.start')}</span>
               <input className="input" type="time" value={startTime} onChange={(event) => setStartTime(event.target.value)} />
             </label>
             <label className="field">
-              <span>Конец</span>
+              <span>{t('plan.end')}</span>
               <input className="input" type="time" value={endTime} onChange={(event) => setEndTime(event.target.value)} />
             </label>
           </div>
@@ -1363,14 +1550,14 @@ function PlanPage({
             disabled={isSubmitting || !title.trim() || !date || !startTime || !endTime}
             onClick={() => void handleCreateEvent()}
           >
-            {isSubmitting ? 'Добавляем…' : 'Добавить'}
+            {isSubmitting ? t('plan.adding') : t('plan.add')}
           </button>
         </div>
 
         <div className="card">
-          <h3 className="card-title">Ближайшие дела</h3>
+          <h3 className="card-title">{t('plan.next')}</h3>
           {upcomingEvents.length === 0 ? (
-            <div className="empty">Занятых интервалов нет.</div>
+            <div className="empty">{t('plan.noEvents')}</div>
           ) : (
             <ul className="event-list">
               {upcomingEvents.map((event) => (
@@ -1378,7 +1565,7 @@ function PlanPage({
                   <div>
                     <strong>{event.title}</strong>
                     <span className="task-meta">
-                      {formatDateTime(event.start_at)} — {formatClock(event.end_at)}
+                      {formatDateTime(event.start_at, locale)} — {formatClock(event.end_at, locale)}
                     </span>
                   </div>
                 </li>
@@ -1398,14 +1585,16 @@ function HistoryPage({
   tasks: ApiTask[];
   onStatusChange: (taskId: string, status: ApiTaskStatus) => void;
 }) {
+  const { t, locale } = useSettings();
+
   return (
     <section className="page">
-      <h1 className="page-title">История</h1>
-      <p className="page-subtitle">Выполненные и отменённые задачи.</p>
+      <h1 className="page-title">{t('history.title')}</h1>
+      <p className="page-subtitle">{t('history.subtitle')}</p>
 
       <div className="card">
         {tasks.length === 0 ? (
-          <div className="empty">История пока пуста.</div>
+          <div className="empty">{t('history.empty')}</div>
         ) : (
           <ul className="task-list">
             {tasks.map((task) => (
@@ -1413,13 +1602,13 @@ function HistoryPage({
                 <div className="task-main">
                   <strong>{task.title}</strong>
                   <span className="task-meta">
-                    {statusLabels[task.status]} · {formatDeadline(task.deadline)}
+                    {t(statusLabelKeys[task.status])} · {formatDeadline(task.deadline, t, locale)}
                   </span>
                 </div>
                 <div className="task-actions">
                   {task.status === 'cancelled' && (
                     <button className="button small" onClick={() => onStatusChange(task.id, 'todo')}>
-                      Вернуть
+                      {t('history.restore')}
                     </button>
                   )}
                 </div>

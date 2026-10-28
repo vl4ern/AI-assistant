@@ -1,9 +1,8 @@
-from typing import Any
-
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.container import container
 from app.modules.integrations.models import (
+    CurrentGroupInfo,
     IntegrationAdapterStatus,
     IntegrationSyncResult,
     Lesson,
@@ -20,7 +19,7 @@ def list_integrations() -> list[IntegrationAdapterStatus]:
 
 @router.get("/lessons", response_model=list[Lesson])
 def list_lessons() -> list[Lesson]:
-    """Занятия расписания из последней синхронизации (IIS БГУИР)."""
+    """Занятия расписания текущей группы (последней синхронизации/импорта)."""
     return container.integration_service.list_lessons()
 
 
@@ -30,20 +29,36 @@ def get_current_week() -> WeekInfo:
     return container.integration_service.get_week_info()
 
 
-@router.post("/import", response_model=IntegrationSyncResult)
-def import_schedule(data: dict[str, Any]) -> IntegrationSyncResult:
+@router.get("/current-group", response_model=CurrentGroupInfo)
+def get_current_group() -> CurrentGroupInfo:
+    """Группа, расписание которой сейчас показывается."""
+    return CurrentGroupInfo(
+        group_number=container.integration_service.get_current_group()
+    )
+
+
+@router.post("/import-file", response_model=IntegrationSyncResult)
+async def import_schedule_file(
+    file: UploadFile = File(...),
+    group_number: str = Form(""),
+) -> IntegrationSyncResult:
     """
-    Импорт расписания из JSON-файла портала БГУИР
-    (формат ответа iis.bsuir.by/api/v1/schedule).
+    Импорт расписания из XLSX-файла (выгрузка расписания группы).
+    Импортированное расписание заменяет прежнее и становится текущим.
     """
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Файл пустой")
     try:
-        return container.integration_service.import_schedule(data)
+        return container.integration_service.import_schedule_file(
+            content, group_hint=group_number
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/sync-group", response_model=IntegrationSyncResult)
-def sync_group(data: dict[str, Any]) -> IntegrationSyncResult:
+def sync_group(data: dict) -> IntegrationSyncResult:
     """Синхронизация расписания группы, введённой пользователем ({"group_number": "..."})."""
     group_number = str(data.get("group_number", "") or "")
     try:

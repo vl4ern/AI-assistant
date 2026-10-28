@@ -44,6 +44,25 @@ class SQLiteCacheStorage(ICacheStorage):
                 CREATE INDEX IF NOT EXISTS idx_external_id 
                 ON tasks(external_id, source_type)
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            """)
+
+    def get_setting(self, key: str, default: str = "") -> str:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT value FROM settings WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            return row[0] if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                (key, value),
+            )
 
     def get_task(self, task_id: str) -> Optional[Task]:
         with sqlite3.connect(self.db_path) as conn:

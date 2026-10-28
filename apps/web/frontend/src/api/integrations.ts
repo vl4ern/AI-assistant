@@ -31,6 +31,7 @@ export type Lesson = {
   week_numbers: number[];
   week: number | null;
   subgroup: number;
+  group_number: string;
   next_date: string | null;
 };
 
@@ -38,6 +39,10 @@ export type WeekInfo = {
   current_week: number;
   semester_start: string;
   today: string;
+};
+
+export type CurrentGroupInfo = {
+  group_number: string;
 };
 
 export function getIntegrations(): Promise<IntegrationAdapterStatus[]> {
@@ -52,10 +57,20 @@ export function getWeekInfo(): Promise<WeekInfo> {
   return apiRequest<WeekInfo>('/v1/integrations/week');
 }
 
-export function importSchedule(data: unknown): Promise<IntegrationSyncResult> {
-  return apiRequest<IntegrationSyncResult>('/v1/integrations/import', {
+export function getCurrentGroup(): Promise<CurrentGroupInfo> {
+  return apiRequest<CurrentGroupInfo>('/v1/integrations/current-group');
+}
+
+export function importScheduleFile(
+  file: File,
+  groupNumber: string
+): Promise<IntegrationSyncResult> {
+  const body = new FormData();
+  body.append('file', file);
+  body.append('group_number', groupNumber);
+  return apiRequest<IntegrationSyncResult>('/v1/integrations/import-file', {
     method: 'POST',
-    body: JSON.stringify(data),
+    body,
   });
 }
 

@@ -14,10 +14,16 @@ def academic_week(day: date, semester_start: date) -> int:
     """
     Учебная неделя БГУИР (1–4) для указанной даты.
 
-    Недели отсчитываются от даты начала семестра и циклятся по 4:
+    Учебные недели меняются по понедельникам, поэтому отсчёт ведём
+    от понедельника той недели, на которую приходится начало семестра
+    (сам semester_start может быть любым днём). Недели циклятся по 4:
     первая неделя семестра — учебная неделя 1, пятая — снова 1 и т.д.
+    Без этой привязки неделя переворачивалась бы в день начала
+    семестра (например, во вторник) и понедельник попадал в прошлую
+    учебную неделю.
     """
-    delta_days = (day - semester_start).days
+    semester_monday = semester_start - timedelta(days=semester_start.weekday())
+    delta_days = (day - semester_monday).days
     if delta_days < 0:
         return 1
     return (delta_days // 7) % WEEK_CYCLE + 1
@@ -127,9 +133,16 @@ class IisScheduleItem:
             dayOfWeek=day_of_week,
         )
 
-    def _generate_external_id(self, occurrence_date: Optional[date] = None) -> str:
+    def _generate_external_id(
+        self,
+        occurrence_date: Optional[date] = None,
+        group_number: str = "",
+    ) -> str:
         """Создаём уникальный идентификатор для сопоставления (по дате появления)."""
         base = f"{self.subject}_{self.startLessonTime}_{self.dayOfWeek}_{self.weekNumber}_{self.numSubgroup}"
+        # Группа входит в ключ: одна и та же пара у разных групп — разные записи
+        if group_number:
+            base += f"_{group_number}"
         # Добавим дату экзамена, если есть
         if self.dateLesson:
             base += f"_{self.dateLesson}"
@@ -144,7 +157,12 @@ class IisScheduleItem:
         emp = self.employees[0]
         return f"{emp.lastName} {emp.firstName} {emp.middleName}".strip()
 
-    def to_task(self, base_date: datetime, is_exam: bool = False) -> Task:
+    def to_task(
+        self,
+        base_date: datetime,
+        is_exam: bool = False,
+        group_number: str = "",
+    ) -> Task:
         """
         Преобразуем занятие в универсальную Task (одиночное появление).
 
@@ -171,7 +189,8 @@ class IisScheduleItem:
             due_date=due_date,
             description=description,
             title=title,
-            external_id=self._generate_external_id(),
+            external_id=self._generate_external_id(group_number=group_number),
+            group_number=group_number,
         )
 
     def to_tasks(
@@ -180,6 +199,7 @@ class IisScheduleItem:
         *,
         semester_start: Optional[date] = None,
         horizon_days: int = 28,
+        group_number: str = "",
     ) -> List[Task]:
         """
         Все появления занятия в пределах горизонта с учётом учебных недель.
@@ -209,7 +229,8 @@ class IisScheduleItem:
                     due_date=self._next_occurrence(base_date),
                     description=description,
                     title=title,
-                    external_id=self._generate_external_id(),
+                    external_id=self._generate_external_id(group_number=group_number),
+                    group_number=group_number,
                 )
             ]
 
@@ -217,7 +238,10 @@ class IisScheduleItem:
         start_time = self._parse_time(self.startLessonTime)
         tasks: List[Task] = []
 
-        for offset in range(0, horizon_days + 1):
+        # Ровно horizon_days дней (по умолчанию 28 = полный цикл 4 учебных
+        # недель). Лишний 29-й день повторял бы сегодняшнюю учебную неделю —
+        # и в недельном виде расписания каждая пара задваивалась.
+        for offset in range(0, horizon_days):
             candidate = base_date + timedelta(days=offset)
 
             if candidate.weekday() != target_weekday:
@@ -241,7 +265,10 @@ class IisScheduleItem:
                     due_date=due_date,
                     description=description,
                     title=title,
-                    external_id=self._generate_external_id(candidate.date()),
+                    external_id=self._generate_external_id(
+                        candidate.date(), group_number=group_number
+                    ),
+                    group_number=group_number,
                 )
             )
 
@@ -252,7 +279,8 @@ class IisScheduleItem:
                     due_date=self._next_occurrence(base_date),
                     description=description,
                     title=title,
-                    external_id=self._generate_external_id(),
+                    external_id=self._generate_external_id(group_number=group_number),
+                    group_number=group_number,
                 )
             )
         return tasks
@@ -341,6 +369,7 @@ class IisScheduleItem:
         description: str,
         title: str,
         external_id: str,
+        group_number: str = "",
     ) -> Task:
         return Task(
             id=str(
@@ -353,6 +382,7 @@ class IisScheduleItem:
             due_date=due_date,
             duration_minutes=self._duration_minutes(),
             labels=[self.lessonTypeAbbrev],
+            group_number=group_number,
             version=3,  # v3: названия анонсов из примечания; повышение версии обновляет старые кэши
             # остальные поля оставим по умолчанию
         )

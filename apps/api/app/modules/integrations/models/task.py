@@ -34,6 +34,7 @@ class Task:
     status: TaskStatus = TaskStatus.PENDING
     project_id: str = ""
     labels: List[str] = field(default_factory=list)
+    group_number: str = ""  # номер учебной группы (для занятий IIS/импорта)
     last_modified: datetime = field(default_factory=datetime.now)
     version: int = 1
 
@@ -51,6 +52,7 @@ class Task:
             "status": self.status.value,
             "project_id": self.project_id,
             "labels": self.labels,
+            "group_number": self.group_number,
             "last_modified": self.last_modified.isoformat(),
             "version": self.version,
         }
@@ -76,6 +78,7 @@ class Task:
             status=TaskStatus(data.get("status", "pending")),
             project_id=data.get("project_id", ""),
             labels=data.get("labels", []),
+            group_number=data.get("group_number", ""),
             last_modified=(
                 datetime.fromisoformat(data["last_modified"])
                 if data.get("last_modified")

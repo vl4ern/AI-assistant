@@ -21,8 +21,10 @@ export function clearToken(): void {
 }
 
 export async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
+  const isFormData = options?.body instanceof FormData;
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+    // Для FormData Content-Type задаёт браузер (нужен boundary multipart)
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
     ...(options?.headers as Record<string, string> | undefined),
   };
 

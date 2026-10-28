@@ -31,17 +31,19 @@ def test_today_when_no_tasks() -> None:
 
 
 def test_today_sorts_by_start() -> None:
-    now = datetime.now(timezone.utc)
+    # Слоты в начале текущих UTC-суток: «сейчас + N часов» у границы
+    # полуночи уходило бы на завтра, и тест зависел бы от времени запуска.
+    day_start = datetime.now(timezone.utc).replace(hour=0, minute=10, second=0, microsecond=0)
     repo = InMemoryKnowledgeRepository()
     repo.create_task(
         TaskCreate(title="Later", workspace_id="study",
-                   scheduled_start=now + timedelta(hours=2),
-                   scheduled_end=now + timedelta(hours=3))
+                   scheduled_start=day_start + timedelta(hours=2),
+                   scheduled_end=day_start + timedelta(hours=3))
     )
     repo.create_task(
         TaskCreate(title="Earlier", workspace_id="study",
-                   scheduled_start=now + timedelta(hours=1),
-                   scheduled_end=now + timedelta(hours=2))
+                   scheduled_start=day_start + timedelta(hours=1),
+                   scheduled_end=day_start + timedelta(hours=2))
     )
     scheduler = GreedyScheduler(slot_minutes=30, horizon_days=1, wake_start_hour=8, wake_end_hour=22)
     scoring = MLScoringService(wake_start_hour=8, wake_end_hour=22, horizon_days=7)

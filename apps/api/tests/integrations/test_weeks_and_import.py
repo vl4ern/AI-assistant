@@ -10,8 +10,12 @@ SEMESTER_START = date(2026, 9, 1)
 
 
 def test_academic_week_cycles_from_semester_start() -> None:
+    # Семестр начинается во вторник 01.09 — недели всё равно считаем
+    # от понедельника 31.08: учебная неделя меняется по понедельникам.
     assert academic_week(date(2026, 9, 1), SEMESTER_START) == 1
-    assert academic_week(date(2026, 9, 7), SEMESTER_START) == 1
+    assert academic_week(date(2026, 9, 6), SEMESTER_START) == 1
+    # Понедельник 07.09 — уже учебная неделя 2, а не «хвост» первой
+    assert academic_week(date(2026, 9, 7), SEMESTER_START) == 2
     assert academic_week(date(2026, 9, 8), SEMESTER_START) == 2
     assert academic_week(date(2026, 9, 15), SEMESTER_START) == 3
     assert academic_week(date(2026, 9, 22), SEMESTER_START) == 4
@@ -72,10 +76,23 @@ def test_to_tasks_skips_today_lesson_already_started() -> None:
     # Вторник 10:00, а «сейчас» — вторник 12:00
     now = datetime(2026, 9, 29, 12, 0)
 
-    tasks = item.to_tasks(now, semester_start=SEMESTER_START, horizon_days=7)
+    tasks = item.to_tasks(now, semester_start=SEMESTER_START, horizon_days=14)
 
     assert all(task.due_date > now for task in tasks)
     assert "2026-09-29" not in {task.due_date.date().isoformat() for task in tasks}
+
+
+def test_full_horizon_covers_cycle_once_per_week() -> None:
+    # Горизонт 28 дней = ровно один цикл учебных недель. Раньше окно
+    # было на день длиннее (29), и «сегодня + 28» повторяло ту же
+    # учебную неделю — в недельном виде расписания пары задваивались.
+    item = make_lesson([1, 2, 3, 4])  # вторник, все недели
+    now = datetime(2026, 10, 27, 8, 0)  # вторник учебной недели 1
+
+    tasks = item.to_tasks(now, semester_start=SEMESTER_START, horizon_days=28)
+
+    dates = [task.due_date.date().isoformat() for task in tasks]
+    assert dates == ["2026-10-27", "2026-11-03", "2026-11-10", "2026-11-17"]
 
 
 def test_import_schedule_uses_one_shot_pipeline(tmp_path: Path) -> None:

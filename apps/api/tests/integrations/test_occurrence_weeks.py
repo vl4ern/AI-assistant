@@ -427,6 +427,7 @@ def test_sync_group_updates_registered_adapter(tmp_path: Path, monkeypatch) -> N
         title="Пара новой группы",
         due_date=datetime.now() + timedelta(days=2),
         duration_minutes=90,
+        group_number="012345",  # реальный адаптер помечает задачи своей группой
     )
 
     def fake_fetch(self, since=None):

@@ -1096,3 +1096,214 @@ textarea.input {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------- Настройки (шестерёнка) ---------- */
+
+.settings-root {
+  position: relative;
+  display: inline-flex;
+}
+
+.gear-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: color 0.2s var(--ease), border-color 0.2s var(--ease),
+    background 0.2s var(--ease);
+}
+
+.gear-button:hover {
+  color: var(--accent);
+  border-color: var(--border-bright);
+}
+
+.gear-button.open {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+/* Лёгкая анимация прокрутки: шестерёнка медленно крутится всегда,
+   при открытии панели — быстрее */
+.gear-icon {
+  animation: gear-spin 14s linear infinite;
+  transform-origin: 50% 50%;
+}
+
+.gear-button:hover .gear-icon,
+.gear-button.open .gear-icon {
+  animation-duration: 3.5s;
+}
+
+@keyframes gear-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.settings-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 30;
+  width: 248px;
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-2);
+  animation: rise 0.22s var(--ease) both;
+}
+
+.settings-panel-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.settings-section {
+  display: grid;
+  gap: 7px;
+}
+
+.settings-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.settings-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings-chip {
+  padding: 6px 11px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: all 0.16s var(--ease);
+}
+
+.settings-chip:hover {
+  color: var(--text);
+  border-color: var(--border-bright);
+}
+
+.settings-chip.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+/* Подпись группы под заголовком расписания */
+.group-subtitle {
+  color: var(--accent);
+  font-weight: 600;
+  margin: -14px 0 0;
+}
+
+.group-subtitle::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(91, 140, 255, 0.5);
+}
+
+/* ---------- Размер шрифта ---------- */
+
+html[data-font='sm'] body {
+  zoom: 0.9;
+}
+
+html[data-font='md'] body {
+  zoom: 1;
+}
+
+html[data-font='lg'] body {
+  zoom: 1.12;
+}
+
+/* ---------- Светлая тема (белый и синий) ---------- */
+
+html[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #f2f5fc;
+  --bg-glow-1: #d9e5ff;
+  --bg-glow-2: #e6efff;
+  --surface: #ffffff;
+  --surface-2: #ffffff;
+  --surface-3: #edf3fe;
+  --border: #d7e0f0;
+  --border-bright: #b8ccf0;
+  --text: #1a2440;
+  --text-soft: #4c5d80;
+  --text-faint: #7f8ca8;
+  --accent: #2563eb;
+  --accent-strong: #1d4ed8;
+  --accent-deep: #1e40af;
+  --accent-soft: rgba(37, 99, 235, 0.1);
+  --success: #15803d;
+  --success-soft: rgba(21, 128, 61, 0.1);
+  --danger: #dc2626;
+  --danger-soft: rgba(220, 38, 38, 0.08);
+  --warn: #b45309;
+  --shadow-1: 0 18px 44px rgba(26, 36, 64, 0.12);
+  --shadow-2: 0 28px 70px rgba(26, 36, 64, 0.16);
+}
+
+html[data-theme='light'] body {
+  -webkit-font-smoothing: antialiased;
+}
+
+html[data-theme='light'] .app-header {
+  background: rgba(255, 255, 255, 0.82);
+  border-bottom-color: rgba(215, 224, 240, 0.9);
+}
+
+html[data-theme='light'] .nav-link:hover {
+  background: rgba(37, 99, 235, 0.08);
+}
+
+html[data-theme='light'] .notice {
+  border-color: rgba(37, 99, 235, 0.25);
+}
+
+html[data-theme='light'] .notice.error {
+  border-color: rgba(220, 38, 38, 0.25);
+}
+
+html[data-theme='light'] .auth-card,
+html[data-theme='light'] .stat-card,
+html[data-theme='light'] .day-card {
+  box-shadow: var(--shadow-1);
+}
+
+html[data-theme='light'] .group-subtitle::before {
+  box-shadow: 0 0 8px rgba(37, 99, 235, 0.35);
+}

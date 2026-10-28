@@ -26,6 +26,10 @@ from app.modules.knowledge.service import KnowledgeService
 IIS_SYNC_INTERVAL_SECONDS = 7200
 GOOGLE_CALENDAR_SYNC_INTERVAL_SECONDS = 900
 
+# Маркер «настройка группы ещё никогда не записывалась»: отличается от
+# пустой строки, которой группа сбрасывается при импорте без группы.
+CURRENT_GROUP_UNSET = "__unset__"
+
 ADAPTER_SOURCES = {
     "IIS": "bsuir-lms",
     "GoogleCalendar": "google-calendar",
@@ -82,6 +86,12 @@ class IntegrationService:
         self._horizon_days = iis_horizon_days
 
         cache = SQLiteCacheStorage(cache_path)
+
+        # Группа, выбранная пользователем в прошлый раз, важнее значения
+        # из настроек: расписание продолжает синхронизироваться по ней.
+        stored_group = cache.get_setting("current_group", CURRENT_GROUP_UNSET)
+        if stored_group != CURRENT_GROUP_UNSET and stored_group:
+            iis_group_number = stored_group
 
         self._scheduler = SyncScheduler(
             cache=cache,
@@ -168,13 +178,16 @@ class IntegrationService:
         """
         Возвращает занятия из кэша синхронизации в виде расписания.
 
-        Прошедшие появления не показываем, а появления с одинаковым
-        естественным ключом (дата, время, предмет, аудитория, подгруппа)
-        сворачиваем в одно — портал иногда правит записи (например, список
-        недель), от чего меняется идентификатор и старая копия зависает
-        в кэше дублем.
+        Показываем только текущую группу — ту, что пользователь ввёл
+        последней (или загрузил из файла). Занятия других групп в кэше
+        не отображаются. Прошедшие появления не показываем, а появления
+        с одинаковым естественным ключом (дата, время, предмет, аудитория,
+        подгруппа) сворачиваем в одно — портал иногда правит записи
+        (например, список недель), от чего меняется идентификатор и старая
+        копия зависает в кэше дублем.
         """
         today_start = datetime.combine(date.today(), time.min)
+        current_group = self.get_current_group()
         lessons: list[Lesson] = []
         seen_keys: set[tuple] = set()
 
@@ -182,6 +195,10 @@ class IntegrationService:
             if task.source_type != SourceType.IIS:
                 continue
             if task.due_date is not None and task.due_date < today_start:
+                continue
+            # Только текущая группа: после синка/импорта с новой группой
+            # расписание прежней не должно смешиваться с новым.
+            if current_group and task.group_number != current_group:
                 continue
 
             lesson = self._task_to_lesson(task)
@@ -201,6 +218,24 @@ class IntegrationService:
             key=lambda lesson: (DAY_ORDER.get(lesson.day_of_week or "", 7), lesson.start_time)
         )
         return lessons
+
+    def get_current_group(self) -> str:
+        """Номер группы, расписание которой сейчас показывается."""
+        get_setting = getattr(self._scheduler.cache, "get_setting", None)
+        if get_setting is not None:
+            stored = get_setting("current_group", CURRENT_GROUP_UNSET)
+            if stored != CURRENT_GROUP_UNSET:
+                return stored
+
+        # Группу никогда не выбирали — фолбэк на группу IIS-адаптера из настроек
+        adapter = self._scheduler.adapters.get("IIS")
+        return getattr(adapter, "group_number", "") or ""
+
+    def _set_current_group(self, group: str) -> None:
+        set_setting = getattr(self._scheduler.cache, "set_setting", None)
+        if set_setting is None:
+            return
+        set_setting("current_group", group.strip())
 
     def _task_to_lesson(self, task: Task) -> Lesson:
         fields = _parse_description_fields(task.description)
@@ -237,6 +272,7 @@ class IntegrationService:
             week=occurrence_week,
             subgroup=subgroup,
             next_date=task.due_date,
+            group_number=task.group_number,
         )
 
     def sync_all(self) -> IntegrationSyncResult:
@@ -260,7 +296,9 @@ class IntegrationService:
             self._reconcile_stale_occurrences(set(result.seen_external_ids))
         return self._to_sync_result(adapter_name, result)
 
-    def _reconcile_stale_occurrences(self, keep_external_ids: set[str]) -> None:
+    def _reconcile_stale_occurrences(
+        self, keep_external_ids: set[str], force: bool = False
+    ) -> None:
         """
         Удаляет «осиротевшие» появления с будущими датами.
 
@@ -268,10 +306,13 @@ class IntegrationService:
         идентификатор, и старая копия зависает в кэше дублем. После
         синхронизации IIS его данные авторитетны: всё будущие появления,
         которых не было в ответе портала, — мусор. Прошедшие не трогаем
-        (их чистит отдельная уборка), импорт без IIS-адаптера тоже
-        не попадает под реконсиляцию.
+        (их чистит отдельная уборка). force=True применяется и без
+        IIS-адаптера — так импорт из файла полностью заменяет прежнее
+        расписание, а не смешивается с ним.
         """
-        if "IIS" not in self._scheduler.adapters or not keep_external_ids:
+        if not keep_external_ids:
+            return
+        if not force and "IIS" not in self._scheduler.adapters:
             return
 
         today_start = datetime.combine(date.today(), time.min)
@@ -317,22 +358,27 @@ class IntegrationService:
             today=now,
         )
 
-    def import_schedule(self, data: dict) -> IntegrationSyncResult:
+    def import_schedule(self, data: dict, group_number: str = "") -> IntegrationSyncResult:
         """
-        Импорт расписания из JSON-файла портала БГУИР.
+        Импорт расписания (payload формата iis.bsuir.by/api/v1/schedule).
 
-        Формат тот же, что отдаёт iis.bsuir.by/api/v1/schedule — можно
-        скачать расписание любой группы и загрузить его вручную, если
-        онлайн-доступ к порталу недоступен или группа не задана в настройках.
+        Работает и для JSON-ответа портала, и для XLSX-файла, который
+        парсер приводит к тому же формату. Импортированное расписание
+        полностью заменяет прежнее: занятия, которых нет в файле,
+        из кэша удаляются. Группа определяется из данных или берётся
+        из подсказки (номер, введённый в интерфейсе) и становится текущей.
         """
         from app.modules.integrations.integration.adapters.iis_adapter import (
+            resolve_payload_group,
             tasks_from_iis_payload,
         )
 
+        group = resolve_payload_group(data, group_number)
         tasks = tasks_from_iis_payload(
             data,
             semester_start=self._semester_start,
             horizon_days=self._horizon_days,
+            group_number=group,
         )
 
         one_shot = _OneShotAdapter(tasks)
@@ -348,7 +394,31 @@ class IntegrationService:
             result = SyncResult(success=False, errors=["Импорт не выполнен"])
 
         self._purge_past_occurrences()
-        return self._to_sync_result("import", result)
+        # Импорт авторитетен: прежнее расписание (в т.ч. другой группы) вычищаем
+        self._reconcile_stale_occurrences(set(result.seen_external_ids), force=True)
+
+        provider = group or "import"
+        if not result.errors:
+            self._set_current_group(group)
+        return self._to_sync_result(provider, result)
+
+    def import_schedule_file(
+        self, content: bytes, group_hint: str = ""
+    ) -> IntegrationSyncResult:
+        """
+        Импорт расписания из XLSX-файла (выгрузка расписания группы).
+
+        Файл разбирается в формат портала и проходит обычный конвейер
+        импорта: учебные недели, кэш, база знаний. Группа берётся из
+        файла, а если её там нет — из номера, введённого пользователем.
+        """
+        from app.modules.integrations.integration.xlsx_import import parse_schedule_xlsx
+
+        if not content:
+            raise ValueError("Файл пустой")
+
+        payload, group = parse_schedule_xlsx(content, group_hint=group_hint)
+        return self.import_schedule(payload, group_number=group)
 
     def sync_group(self, group_number: str) -> IntegrationSyncResult:
         """
@@ -382,6 +452,10 @@ class IntegrationService:
         self._purge_past_occurrences()
         # Данные этой группы авторитетны: прошлую группу вычищаем
         self._reconcile_stale_occurrences(set(result.seen_external_ids))
+        # Расписание показываем только для введённой группы — но лишь когда
+        # синк прошёл успешно, иначе под новой подписью окажется старое.
+        if not result.errors:
+            self._set_current_group(group)
         return self._to_sync_result(group, result)
 
     def start_background(self, check_interval: int = 30) -> None:

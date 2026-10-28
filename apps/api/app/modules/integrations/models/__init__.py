@@ -46,9 +46,19 @@ class Lesson(BaseModel):
         default=0,
         description="Подгруппа: 0 — общая пара, 1 — первая подгруппа, 2 — вторая",
     )
+    group_number: str = Field(
+        default="",
+        description="Номер учебной группы, к которой относится занятие",
+    )
     next_date: datetime | None = Field(
         default=None, description="Ближайшая дата занятия"
     )
+
+
+class CurrentGroupInfo(BaseModel):
+    """Группа, расписание которой сейчас показывается."""
+
+    group_number: str = Field(default="", description="Номер группы (пусто — не выбрана)")
 
 
 class WeekInfo(BaseModel):
