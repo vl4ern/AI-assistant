@@ -131,7 +131,7 @@ class IisScheduleItem:
             return 90
         delta = (end.hour * 60 + end.minute) - (start.hour * 60 + start.minute)
         return max(delta, 0) or 90
-    
+
     def _format_employee(self) -> str:
         """Форматирует ФИО преподавателя."""
         if not self.employees:
@@ -211,7 +211,7 @@ class IisScheduleItem:
                 days_until = (day_index - today.weekday()) % 7
                 if days_until == 0:
                     t = self._parse_time(self.startLessonTime) or time(0, 0)
-                    if t <= utc_now().time():
+                    if t <= base_date.time():
                         days_until = 7
                 target_date = today + timedelta(days=days_until)
             else:
@@ -240,7 +240,7 @@ class IisScheduleItem:
                 # Если попали на сегодня, но время пары уже прошло — на цикл вперёд.
                 if target_date == today:
                     t = self._parse_time(self.startLessonTime) or time(0, 0)
-                    if t <= utc_now().time():
+                    if t <= base_date.time():
                         target_date += timedelta(weeks=cycle)
 
             time_part = self._parse_time(self.startLessonTime) or time(0, 0)
