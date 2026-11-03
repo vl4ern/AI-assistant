@@ -33,6 +33,8 @@ paths:
       tags: [tasks]
       summary: List tasks
       operationId: listTasks
+      security:
+        - bearerAuth: []
       responses:
         "200":
           description: Tasks list
@@ -46,6 +48,8 @@ paths:
       tags: [tasks]
       summary: Create task
       operationId: createTask
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -62,11 +66,72 @@ paths:
         "422":
           $ref: "#/components/responses/ValidationError"
 
+  /v1/tasks/extract:
+    post:
+      tags: [tasks]
+      summary: Extract task draft from text or file
+      description: >-
+        Локальная мультимодальная модель разбирает текст или файл и возвращает
+        черновик. Черновик не сохраняется: для создания задачи вызовите
+        POST /v1/tasks.
+      operationId: extractTaskDraft
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+                  default: ""
+                file:
+                  type: string
+                  format: binary
+              description: Нужен хотя бы один из параметров text или file.
+      responses:
+        "200":
+          description: Extracted task draft
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskDraft"
+        "400":
+          description: Empty or unsupported input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: Uploaded file is too large
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "502":
+          description: Local model returned an invalid response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Local model is unavailable or disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /v1/tasks/{task_id}/status:
     patch:
       tags: [tasks]
       summary: Update task status
       operationId: updateTaskStatus
+      security:
+        - bearerAuth: []
       parameters:
         - in: path
           name: task_id
@@ -96,6 +161,8 @@ paths:
       tags: [tasks]
       summary: List events
       operationId: listEvents
+      security:
+        - bearerAuth: []
       responses:
         "200":
           description: Events list
@@ -109,6 +176,8 @@ paths:
       tags: [tasks]
       summary: Create event
       operationId: createEvent
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -133,6 +202,8 @@ paths:
         Пересчитывает план по задачам/событиям с учетом ML-score,
         зависимостей и greedy-раскладки.
       operationId: rebuildSchedule
+      security:
+        - bearerAuth: []
       responses:
         "200":
           description: Schedule plan
@@ -146,6 +217,8 @@ paths:
       tags: [schedule]
       summary: Get today view
       operationId: getToday
+      security:
+        - bearerAuth: []
       responses:
         "200":
           description: Tasks planned for current day
@@ -162,6 +235,8 @@ paths:
         Добавляет обучающий пример после ручного перемещения задачи
         пользователем.
       operationId: reorderFeedback
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -232,6 +307,12 @@ paths:
           $ref: "#/components/responses/ValidationError"
 
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: HMAC
+
   responses:
     NotFound:
       description: Resource not found
@@ -270,6 +351,54 @@ components:
           type: string
       required:
         - detail
+
+    TaskDraft:
+      type: object
+      description: >-
+        Черновик задачи от локальной модели. Не является фактом базы знаний,
+        пока пользователь не отправит его в POST /v1/tasks.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          anyOf:
+            - type: string
+            - type: "null"
+        estimated_minutes:
+          type: integer
+          minimum: 15
+          maximum: 1440
+          default: 60
+        priority:
+          type: integer
+          minimum: 1
+          maximum: 4
+          default: 3
+        deadline:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        workspace_id:
+          type: string
+          default: study
+        project_id:
+          anyOf:
+            - type: string
+            - type: "null"
+        input_kind:
+          type: string
+          enum: [text, image]
+          default: text
+        warnings:
+          type: array
+          items:
+            type: string
+          default: []
+      required:
+        - title
 
     TaskStatus:
       type: string

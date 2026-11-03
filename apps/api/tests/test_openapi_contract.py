@@ -23,6 +23,26 @@ def test_contract_contains_intelligence_fields() -> None:
     assert "min_chunk_minutes" in task_create_props
 
 
+def test_contract_contains_task_extraction_endpoint() -> None:
+    contract = _load_contract()
+
+    path = contract["paths"]["/v1/tasks/extract"]["post"]
+    assert path["security"] == [{"bearerAuth": []}]
+
+    request_schema = path["requestBody"]["content"]["multipart/form-data"][
+        "schema"
+    ]
+    assert set(request_schema["properties"]) == {"text", "file"}
+
+    draft_props = contract["components"]["schemas"]["TaskDraft"]["properties"]
+    assert "title" in draft_props
+    assert "input_kind" in draft_props
+    assert "warnings" in draft_props
+    assert draft_props["input_kind"]["enum"] == ["text", "image"]
+
+    assert contract["components"]["securitySchemes"]["bearerAuth"]["scheme"] == "bearer"
+
+
 def test_contract_contains_reorder_feedback_endpoint() -> None:
     contract = _load_contract()
 

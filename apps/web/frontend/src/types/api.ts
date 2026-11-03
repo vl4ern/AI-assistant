@@ -38,3 +38,15 @@ export type ApiTaskCreate = {
   allow_split?: boolean;
   min_chunk_minutes?: number | null;
 };
+
+export type ApiTaskDraft = {
+  title: string;
+  description: string | null;
+  estimated_minutes: number;
+  priority: number;
+  deadline: string | null;
+  workspace_id: string;
+  project_id: string | null;
+  input_kind: 'text' | 'image';
+  warnings: string[];
+};

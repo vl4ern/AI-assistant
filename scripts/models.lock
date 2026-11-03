@@ -1,0 +1,6 @@
+# Репозиторий и ревизия Hugging Face задаются в scripts/download-models.sh:
+#   unsloth/Qwen3.5-4B-GGUF @ e87f176479d0855a907a41277aca2f8ee7a09523
+#
+# Формат: <имя файла>\t<sha256>
+Qwen3.5-4B-UD-Q4_K_XL.gguf	b252c5610a42ca82d20fe2a12813e9d069eed89292907e26c783eeb0bc961bc7
+mmproj-F16.gguf	cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864

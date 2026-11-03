@@ -9,6 +9,7 @@
 
 - `GET /v1/tasks` — список задач.
 - `POST /v1/tasks` — создать задачу.
+- `POST /v1/tasks/extract` — распознать черновик задачи из текста или файла (multipart).
 - `PATCH /v1/tasks/{task_id}/status` — изменить статус.
 - `GET /v1/events` — список занятых событий.
 - `POST /v1/events` — создать событие.
@@ -26,6 +27,35 @@
 - `depends_on: string[]` (ID блокирующих задач, по умолчанию `[]`)
 - `allow_split: bool` (по умолчанию `false`)
 - `min_chunk_minutes: int | null` (15..1440)
+
+### TaskDraft (черновик распознавания)
+
+`POST /v1/tasks/extract` принимает `multipart/form-data`:
+
+- `text: string` (необязательное, по умолчанию пустое)
+- `file: binary` (необязательное; TXT, MD, CSV, JSON, JPG, PNG, WebP, GIF, BMP)
+
+Нужен хотя бы один из параметров `text` или `file`. Размер задаётся
+`LOCAL_LLM_MAX_TEXT_KB` и `LOCAL_LLM_MAX_IMAGE_MB`.
+
+Ответ — черновик, который **не сохраняется** в базе знаний. Чтобы создать
+задачу, пользователь отправляет его (после проверки/правки) обычным
+`POST /v1/tasks`.
+
+- `title: string` (1..200)
+- `description: string | null`
+- `estimated_minutes: int` (15..1440, по умолчанию `60`)
+- `priority: int` (1..4, по умолчанию `3`)
+- `deadline: datetime | null`
+- `workspace_id: string` (`study` / `personal`, по умолчанию `study`)
+- `project_id: string | null`
+- `input_kind: "text" | "image"` — что именно распознавали
+- `warnings: string[]` — поля, которые модель вернула некорректно и backend
+  поправил автоматически
+
+Ошибки: `400` — пустой/неподдерживаемый ввод, `413` — файл больше лимита,
+`502` — модель вернула некорректный ответ, `503` — `llama-server` недоступен
+или распознавание отключено (`LOCAL_LLM_ENABLED=false`).
 
 ### TaskStatus
 

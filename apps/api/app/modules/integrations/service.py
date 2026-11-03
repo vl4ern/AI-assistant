@@ -10,12 +10,17 @@ from app.modules.integrations.integration.kb_bridge import (
     KnowledgeIngestClient,
 )
 from app.modules.integrations.integration.interfaces import IServiceAdapter
+from app.modules.integrations.integration.task_extraction import (
+    TaskDraftExtractor,
+    TaskExtractionError,
+)
 from app.modules.integrations.integration.retry_queue import RetryQueue
 from app.modules.integrations.integration.sync_scheduler import SyncScheduler
 from app.modules.integrations.models import (
     IntegrationAdapterStatus,
     IntegrationSyncResult,
     Lesson,
+    TaskDraft,
     WeekInfo,
 )
 from app.modules.integrations.models.iis_models import academic_week
@@ -81,9 +86,11 @@ class IntegrationService:
         google_token_file: str = "",
         semester_start_date: str = "",
         iis_horizon_days: int = 28,
+        task_draft_extractor: TaskDraftExtractor | None = None,
     ) -> None:
         self._semester_start = self._parse_semester_start(semester_start_date)
         self._horizon_days = iis_horizon_days
+        self._task_draft_extractor = task_draft_extractor
 
         cache = SQLiteCacheStorage(cache_path)
 
@@ -419,6 +426,32 @@ class IntegrationService:
 
         payload, group = parse_schedule_xlsx(content, group_hint=group_hint)
         return self.import_schedule(payload, group_number=group)
+
+    def extract_task_draft(
+        self,
+        *,
+        text: str = "",
+        file_content: bytes | None = None,
+        filename: str = "",
+        content_type: str = "",
+    ) -> TaskDraft:
+        """
+        Распознаёт черновик задачи из текста или файла локальной моделью.
+
+        Метод ничего не сохраняет: черновик возвращается пользователю,
+        а факт в базе знаний появляется только после POST /v1/tasks.
+        """
+        if self._task_draft_extractor is None:
+            raise TaskExtractionError(
+                "Распознавание задач локальной моделью не настроено.",
+                status_code=503,
+            )
+        return self._task_draft_extractor.extract(
+            text=text,
+            file_content=file_content,
+            filename=filename,
+            content_type=content_type,
+        )
 
     def sync_group(self, group_number: str) -> IntegrationSyncResult:
         """

@@ -17,7 +17,9 @@ import type { CurrentGroupInfo, Lesson, WeekInfo } from './api/integrations';
 import { rebuildSchedule } from './api/schedule';
 import type { SchedulePlan } from './api/schedule';
 import { createTask as createTaskApi, getTasks, updateTaskStatus } from './api/tasks';
-import type { ApiTask, ApiTaskStatus } from './types/api';
+import { TaskExtractPanel } from './components/TaskExtractPanel';
+import { splitDraftDeadline } from './taskDraft';
+import type { ApiTask, ApiTaskCreate, ApiTaskDraft, ApiTaskStatus } from './types/api';
 import { SettingsProvider } from './settings-provider';
 import { useSettings } from './settings';
 import type { TFunc } from './settings';
@@ -770,7 +772,7 @@ function TasksPage({
 }: {
   tasks: ApiTask[];
   onStatusChange: (taskId: string, status: ApiTaskStatus) => void;
-  onCreate: (payload: { title: string; priority: number; estimated_minutes: number; deadline: string | null; description: string | null }) => Promise<void>;
+  onCreate: (payload: ApiTaskCreate) => Promise<void>;
 }) {
   const { t, locale } = useSettings();
   const [title, setTitle] = useState('');
@@ -781,14 +783,35 @@ function TasksPage({
   const [description, setDescription] = useState('');
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [draftNotice, setDraftNotice] = useState('');
 
   const activeTasks = tasks.filter((task) => ['todo', 'in_progress', 'blocked'].includes(task.status));
 
+  function resetForm() {
+    setTitle('');
+    setDescription('');
+    setDeadlineDate('');
+    setDeadlineTime('');
+  }
+
+  async function submitTask(payload: ApiTaskCreate) {
+    setIsSubmitting(true);
+    setError('');
+    try {
+      await onCreate(payload);
+      resetForm();
+      setDraftNotice('');
+    } catch (createError) {
+      setError(getErrorMessage(createError));
+      throw createError;
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   async function handleCreate() {
     try {
-      setIsSubmitting(true);
-      setError('');
-      await onCreate({
+      await submitTask({
         title: title.trim(),
         priority: Number(priority),
         estimated_minutes: Number(estimate),
@@ -798,15 +821,24 @@ function TasksPage({
             : null,
         description: description.trim() || null,
       });
-      setTitle('');
-      setDescription('');
-      setDeadlineDate('');
-      setDeadlineTime('');
-    } catch (createError) {
-      setError(getErrorMessage(createError));
-    } finally {
-      setIsSubmitting(false);
+    } catch {
+      // Текст ошибки уже показан над формой.
     }
+  }
+
+  function applyDraft(draft: ApiTaskDraft) {
+    const { date, time } = splitDraftDeadline(draft.deadline);
+    setTitle(draft.title);
+    setPriority(String(draft.priority));
+    setEstimate(String(draft.estimated_minutes));
+    setDeadlineDate(date);
+    setDeadlineTime(time);
+    setDescription(draft.description ?? '');
+    setDraftNotice(t('tasks.extract.fillForm'));
+    setError('');
+    document
+      .getElementById('task-form-card')
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   return (
@@ -814,8 +846,12 @@ function TasksPage({
       <h1 className="page-title">{t('tasks.title')}</h1>
       <p className="page-subtitle">{t('tasks.subtitle')}</p>
 
-      <div className="card">
-        <h3 className="card-title">{t('tasks.new')}</h3>
+      <div className="card" id="task-form-card">
+        <div className="card-head">
+          <h3 className="card-title">{t('tasks.new')}</h3>
+          <TaskExtractPanel onCreate={submitTask} onUseDraft={applyDraft} />
+        </div>
+        {draftNotice && <div className="notice">{draftNotice}</div>}
         <div className="form-grid">
           <label className="field span-2">
             <span>{t('tasks.what')}</span>

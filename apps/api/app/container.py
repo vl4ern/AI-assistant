@@ -6,6 +6,10 @@ from datetime import datetime, timedelta, timezone
 from app.core.settings import settings
 from app.modules.auth.models import User
 from app.modules.auth.service import AuthService
+from app.modules.integrations.integration.adapters.llama_server_client import (
+    LlamaServerChatClient,
+)
+from app.modules.integrations.integration.task_extraction import TaskDraftExtractor
 from app.modules.integrations.service import IntegrationService
 from app.modules.intelligence.ml_scoring import MLScoringService
 from app.modules.intelligence.scheduler import GreedyScheduler
@@ -69,6 +73,23 @@ class Container:
             scoring_service=self.scoring_service,
         )
 
+        self.task_draft_extractor: TaskDraftExtractor | None = None
+        if settings.local_llm_enabled:
+            self.task_draft_extractor = TaskDraftExtractor(
+                client=LlamaServerChatClient(
+                    base_url=settings.local_llm_base_url,
+                    model=settings.local_llm_model,
+                    api_key=settings.local_llm_api_key,
+                    timeout_seconds=settings.local_llm_timeout_seconds,
+                    disable_thinking=settings.local_llm_disable_thinking,
+                ),
+                vision_enabled=settings.local_llm_vision_enabled,
+                max_text_bytes=settings.local_llm_max_text_kb * 1024,
+                max_image_bytes=settings.local_llm_max_image_mb * 1024 * 1024,
+                max_tokens=settings.local_llm_max_tokens,
+                temperature=settings.local_llm_temperature,
+            )
+
         self.integration_service = IntegrationService(
             knowledge_service=self.knowledge_service,
             cache_path=settings.integration_cache_path,
@@ -77,6 +98,7 @@ class Container:
             google_token_file=settings.google_token_file,
             semester_start_date=settings.semester_start_date,
             iis_horizon_days=settings.iis_horizon_days,
+            task_draft_extractor=self.task_draft_extractor,
         )
 
         self._ensure_demo_user()

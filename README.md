@@ -41,22 +41,31 @@
 ```bash
 cp .env.example .env
 # впишите номер группы: IIS_GROUP_NUMBER=421701
-docker compose up -d --build
+make up
 ```
 
-| Что | Где |
-|---|---|
-| Интерфейс | http://localhost:5173 |
-| API-документация (Swagger) | http://localhost:8000/docs |
-| Проверка живости | http://localhost:8000/health |
+`make up` — одна команда для любого ПК: скачивает модели (если их ещё нет),
+собирает backend и frontend, поднимает `api + web + postgres + llm` в
+Docker. Первый запуск дольше обычного: нужно скачать ~3.4 ГБ моделей и
+образ `llama.cpp`.
+
+| Что                                 | Где                       |
+| -------------------------------------- | ---------------------------- |
+| Интерфейс                     | http://localhost:5173        |
+| API-документация (Swagger) | http://localhost:8000/docs   |
+| Проверка живости        | http://localhost:8000/health |
+| llama-server (напрямую)    | http://localhost:8080/health |
 
 Демо-аккаунт: **demo / demo** (с демо-задачами). Остальные пользователи
 регистрируются сами — данные у каждого свои.
 
 Если порт 8000 занят другим сервисом — поставьте свой в `.env`:
-`API_PORT=8010`. Docker-compose подхватит автоматически.
+`API_PORT=8010`. Docker-compose подхватит автоматически. Аналогично
+`LOCAL_LLM_PORT=8081`, если занят 8080 (внутри Docker API всё равно ходит
+на `llm:8080`).
 
-Останов: `docker compose down`. Стирание данных: `docker compose down -v`.
+Останов: `make compose-down` или `docker compose down`. Стирание данных:
+`docker compose down -v`.
 
 ### Шпаргалка по перезапуску (сохрани себе)
 
@@ -70,16 +79,18 @@ sudo systemctl start docker
 #    API_PORT=8010, VITE_API_URL=http://localhost:8010, IIS_GROUP_NUMBER=421701
 grep -E "API_PORT|IIS_GROUP" .env
 
-# 3. Перезапустить проект целиком
-docker compose down && docker compose up -d --build
+# 3. Перезапустить проект целиком (модели скачаются при необходимости)
+make up
 
 # 4. Проверить, что всё живо
-docker compose ps                       # все три контейнера должны быть Up
+docker compose ps                       # api, web, postgres, llm — Up (llm — healthy)
 curl --noproxy '*' http://localhost:8010/health   # {"status":"ok",...}
 # интерфейс: http://localhost:5173
 
 # Полезное:
 docker compose logs api --tail 30       # логи backend
+docker compose logs llm --tail 30       # логи локальной модели
+make logs                               # api + llm в реальном времени
 docker compose restart api             # перезапустить только API
 docker compose down                    # остановить проект
 ```
@@ -95,11 +106,54 @@ make api-install   # venv + зависимости backend
 make api-dev      # API на http://localhost:8000
 make web-install  # зависимости frontend
 make web-dev      # интерфейс на http://localhost:5173
-make api-test     # тесты backend (66 шт.)
+make api-test     # тесты backend (99 шт.)
 ```
 
 `.env` читают и Makefile, и backend (`app/core/settings.py` подключает
 python-dotenv), переменные одни и те же.
+
+### Распознавание задач из фото и текста
+
+Кнопка «Добавить по фото или тексту» на странице «Задачи» работает через
+локальную мультимодальную модель Qwen3.5 4B и `llama-server` из llama.cpp.
+
+**Модели не хранятся в git.** Они весят ~3.4 ГБ, а GitHub не принимает
+файлы больше 100 МБ; Git LFS на такой объём не влезает в бесплатную
+квоту. Вместо этого `make models` скачивает те же файлы из публичного
+репозитория `unsloth/Qwen3.5-4B-GGUF` на закреплённой ревизии и сверяет
+SHA256 с `scripts/models.lock`. На всех компьютерах получаются одинаковые
+модели. `make up` и `make llm-dev` вызывают `make models` автоматически.
+
+Три режима запуска:
+
+```bash
+# 1. Всё в Docker (рекомендуется): api + web + postgres + llm
+make up
+
+# 2. Модель на хосте, backend локально
+make llm-dev       # скачает модели и поднимет llama-server на :8080
+make api-dev       # во втором терминале
+
+# 3. API в Docker, модель на хосте
+make llm-dev
+LOCAL_LLM_BASE_URL=http://host.docker.internal:8080 \
+  docker compose up -d --no-deps postgres api web
+```
+
+- В Docker API ходит на `http://llm:8080` (имя сервиса), порт 8080
+  проброшен на хост для отладки и локального backend.
+- Контейнер `llm` — официальный CPU-образ
+  `ghcr.io/ggml-org/llama.cpp:server`, поэтому запуск одинаковый на
+  Linux/Windows/macOS. Для NVIDIA замените образ на
+  `ghcr.io/ggml-org/llama.cpp:server-cuda` и добавьте `gpus: all`.
+- Локальный скрипт слушает `0.0.0.0`, чтобы был доступен из Docker; только
+  с этой машины — `LOCAL_LLM_HOST=127.0.0.1 make llm-dev`. Если
+  `llama-server` не в `PATH`:
+  `LLAMA_SERVER_BIN=/path/to/llama-server make llm-dev`. На GPU с 4 ГБ
+  начните с `LOCAL_LLM_GPU_LAYERS=0` (CPU) или небольшого числа слоёв.
+- Если распознавание не нужно, поставьте `LOCAL_LLM_ENABLED=false` и
+  поднимайте без контейнера модели:
+  `docker compose up -d --no-deps postgres api web`.
 
 ### Стек
 
@@ -107,7 +161,8 @@ python-dotenv), переменные одни и те же.
   (с in-memory фолбэком), SQLite для кэша интеграций.
 - **Frontend**: React 19, TypeScript, Vite. Без UI-библиотек — один CSS-файл
   с переменными, тёмно-синяя тема.
-- **Инфраструктура**: docker-compose (api + web + postgres), GitHub Actions CI.
+- **Инфраструктура**: docker-compose (api + web + postgres + llm),
+  официальный образ llama.cpp, GitHub Actions CI.
 
 ---
 
@@ -124,7 +179,7 @@ AI-assistant/
 │   │   │   │   ├── router.py         реестр всех маршрутов
 │   │   │   │   ├── deps.py           get_current_user (проверка токена)
 │   │   │   │   ├── routes_auth.py   регистрация/вход/профиль
-│   │   │   │   ├── routes_tasks.py  задачи и события (+ владелец)
+│   │   │   │   ├── routes_tasks.py  задачи, события, распознавание черновика
 │   │   │   │   ├── routes_schedule.py  план, «сегодня», фидбек
 │   │   │   │   ├── routes_integrations.py  синхронизация, расписание, недели
 │   │   │   │   └── routes_health.py  /health
@@ -133,7 +188,7 @@ AI-assistant/
 │   │   │   └── modules/
 │   │   │       ├── knowledge/        данные: факты + пользователи
 │   │   │       ├── auth/              пароли, токены
-│   │   │       ├── integrations/      портал БГУИР, Google, кэш, недели
+│   │   │       ├── integrations/      портал БГУИР, Google, кэш, локальная LLM
 │   │   │       └── intelligence/     планировщик, ML-скоринг
 │   │   ├── tests/                    pytest-тесты (по папкам модулей)
 │   │   ├── requirements*.txt
@@ -143,9 +198,14 @@ AI-assistant/
 │           ├── App.tsx               весь интерфейс: вход + 5 страниц
 │           ├── api/                  типизированные API-клиенты
 │           └── index.css             тема (CSS-переменные)
-├── docker-compose.yml                api + web + postgres
+├── docker-compose.yml                api + web + postgres + llm
 ├── packages/contracts/openapi.yaml   контракт API
 ├── docs/                             документация модулей и процессов
+├── scripts/
+│   ├── download-models.sh            скачивание GGUF из Hugging Face
+│   ├── models.lock                   ревизия + SHA256 моделей
+│   └── run-llama-server.sh           локальный запуск без Docker
+├── models/                           GGUF-модели (скачиваются, не в git)
 ├── Makefile                          короткие команды
 └── .github/workflows/ci.yml          тесты + линт на каждый пуш
 ```
@@ -160,7 +220,7 @@ AI-assistant/
 ```text
                         ┌──────────────────────────────┐
    внешний мир ────────►│  integrations                │
-   (портал БГУИР, файл) │  кэш SQLite, недели, подгруппы│
+   (портал, файл, LLM)  │  кэш, недели, распознавание  │
                         └──────────────┬───────────────┘
                                        │ мост (kb_bridge)
                                        ▼
@@ -195,6 +255,10 @@ AI-assistant/
 Каждый сервис — обычный Python-класс, зависимости приходят через
 конструктор. Вся сборка в одном месте — `container.py`. Для тестов это
 означает: любой сервис можно собрать вручную с подделками.
+
+В docker-compose `llama-server` — отдельный сервис `llm`; при локальном
+запуске его поднимает `make llm-dev`. Для backend это всё равно внешний
+источник, доступ к которому идёт только через `integrations`.
 
 ---
 
@@ -262,11 +326,14 @@ models/
   sync.py               SyncResult, ConflictNotification
   iis_models.py         парсер JSON портала + учебные недели
   google_models.py      модели Google Calendar
+  extraction.py         TaskDraft — черновик задачи (API-схема)
   __init__.py           API-схемы: Lesson, WeekInfo, IntegrationSyncResult
 integration/
   interfaces.py         IServiceAdapter, ICacheStorage (абстракции)
   adapters/iis_adapter.py    портал БГУИР (+ общий парсер payload)
   adapters/google_calendar_adapter.py   Google Calendar (OAuth)
+  adapters/llama_server_client.py       клиент OpenAI-совместимого llama-server
+  task_extraction.py    промпт, проверка файлов и нормализация ответа LLM
   sync_scheduler.py     SyncScheduler: фоновая синхронизация + события
   cache_storage.py      SQLite-кэш по external_id
   conflict_resolver.py  слияние версий (LWW / merge-with-notify)
@@ -297,6 +364,18 @@ integration/
        ↓
 6. Фронтенд: расписание по неделям/подгруппам
 ```
+
+**Распознавание задач из фото и текста** (кнопка на странице «Задачи»):
+`POST /v1/tasks/extract` принимает текст и/или файл. `TaskDraftExtractor`
+проверяет формат (текст — UTF-8/CP1251, изображения — по сигнатуре),
+отправляет запрос в `llama-server` (в Docker — контейнер `llm`;
+`/v1/chat/completions`, JSON-режим, «размышления» отключены) и нормализует
+ответ: чинит приоритет, дедлайн, длительность и обрезает слишком длинные
+поля. Наружу возвращается только
+черновик `TaskDraft` — он **не** пишется в базу знаний. Сохранение идёт
+обычным `POST /v1/tasks` после подтверждения пользователем, поэтому
+правило «данными владеет `knowledge`» не нарушается, а внешний мир
+(локальная модель) остаётся внутри `integrations`.
 
 **Фоновая синхронизация** стартует вместе с приложением (lifespan в
 `main.py`) и опрашивает IIS раз в 2 часа. `RetryQueue` возвращает
@@ -355,6 +434,8 @@ utils/time_utils.py  рабочие окна бодрствования
 src/api/client.ts        fetch с токеном; 401 → UnauthorizedError → выход
 src/api/auth.ts          login / register / me
 src/api/tasks.ts         задачи (создать, сменить статус)
+src/api/taskExtract.ts   черновик задачи из текста/файла
+src/components/TaskExtractPanel.tsx  модальное окно распознавания
 src/api/events.ts        занятые интервалы
 src/api/schedule.ts      rebuild-плана
 src/api/integrations.ts  уроки, недели, синхронизация, импорт файла
@@ -371,14 +452,16 @@ src/api/integrations.ts  уроки, недели, синхронизация, �
 
 ## Откуда берутся данные: полный поток
 
-| Данные | Источник | Путь | Где живут |
-|---|---|---|---|
-| Занятия расписания | портал БГУИР (кнопка «Обновить», фон каждые 2 часа) или XLSX-файл | адаптер → кэш → мост | SQLite-кэш (raw) + PostgreSQL (события) |
-| Личные задачи | форма на странице «Задачи» | `POST /v1/tasks` → правила → репозиторий | PostgreSQL |
-| Занятые интервалы | форма на странице «План» | `POST /v1/events` | PostgreSQL |
-| План на день | вычисляется | `POST /v1/schedule/rebuild` | интервалы в задачах |
-| Демо-задачи | создаются при первом старте, если база пуста (`container._seed_demo_data`) | — | PostgreSQL, владелец `demo-user` |
-| Учебная неделя | вычисляется из даты и `SEMESTER_START_DATE` | `academic_week()` | нигде — чистая функция |
+| Данные                        | Источник                                                                                                  | Путь                                                       | Где живут                                 |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------- |
+| Занятия расписания | портал БГУИР (кнопка «Обновить», фон каждые 2 часа) или XLSX-файл  | адаптер → кэш → мост                           | SQLite-кэш (raw) + PostgreSQL (события) |
+| Личные задачи           | форма на странице «Задачи»                                                                 | `POST /v1/tasks` → правила → репозиторий | PostgreSQL                                        |
+| Черновик задачи         | текст или фото/файл на странице «Задачи»                                      | `POST /v1/tasks/extract` → локальная LLM          | нигде — только в ответе до подтверждения |
+| Сохранение черновика | кнопка «Добавить сразу» или «Исправить в форме»                        | `POST /v1/tasks`                                            | PostgreSQL                                        |
+| Занятые интервалы   | форма на странице «План»                                                                     | `POST /v1/events`                                            | PostgreSQL                                        |
+| План на день              | вычисляется                                                                                            | `POST /v1/schedule/rebuild`                                  | интервалы в задачах              |
+| Демо-задачи               | создаются при первом старте, если база пуста (`container._seed_demo_data`) | —                                                             | PostgreSQL, владелец `demo-user`        |
+| Учебная неделя         | вычисляется из даты и `SEMESTER_START_DATE`                                                   | `academic_week()`                                            | нигде — чистая функция         |
 
 Что удаляется, а что нет: завершённые/отменённые задачи остаются в базе
 («мягкое удаление», видны в «Истории»). Занятия из кэша не удаляются —
@@ -422,28 +505,29 @@ academic_week(day, semester_start) = (day - semester_start).days // 7 % 4 + 1
 Базовый URL: `http://localhost:8000`. Полный машиночитаемый контракт:
 `packages/contracts/openapi.yaml`, интерактивный — `/docs`.
 
-| Метод | Путь | Что делает | Токен |
-|---|---|---|---|
-| GET | `/health` | живость сервиса | — |
-| POST | `/v1/auth/register` | регистрация → токен | — |
-| POST | `/v1/auth/login` | вход → токен | — |
-| GET | `/v1/auth/me` | текущий пользователь | ✓ |
-| GET | `/v1/tasks` | мои + общие задачи | ✓ |
-| POST | `/v1/tasks` | создать задачу (владелец — я) | ✓ |
-| GET | `/v1/tasks/{id}` | задача (только своя/общая) | ✓ |
-| PATCH | `/v1/tasks/{id}/status` | сменить статус | ✓ |
-| GET | `/v1/events` | мои + общие события | ✓ |
-| POST | `/v1/events` | создать занятый интервал | ✓ |
-| POST | `/v1/schedule/rebuild` | построить план | ✓ |
-| GET | `/v1/schedule/today` | представление «сегодня» | ✓ |
-| POST | `/v1/schedule/reorder-feedback` | обучающий пример порядка | ✓ |
-| GET | `/v1/integrations` | статус адаптеров | — |
-| GET | `/v1/integrations/lessons` | занятия (недели, подгруппы, даты) | — |
-| GET | `/v1/integrations/week` | текущая учебная неделя | — |
-| POST | `/v1/integrations/sync` | синхронизировать всё | — |
-| POST | `/v1/integrations/{name}/sync` | синхронизировать адаптер (IIS, GoogleCalendar) | — |
-| POST | `/v1/integrations/import-file` | импорт расписания группы из XLSX-файла (multipart: file, group_number) | — |
-| GET | `/v1/integrations/current-group` | группа, расписание которой сейчас показывается | — |
+| Метод | Путь                           | Что делает                                                                                 | Токен |
+| ---------- | ---------------------------------- | --------------------------------------------------------------------------------------------------- | ---------- |
+| GET        | `/health`                        | живость сервиса                                                                       | —         |
+| POST       | `/v1/auth/register`              | регистрация → токен                                                                | —         |
+| POST       | `/v1/auth/login`                 | вход → токен                                                                              | —         |
+| GET        | `/v1/auth/me`                    | текущий пользователь                                                             | ✓         |
+| GET        | `/v1/tasks`                      | мои + общие задачи                                                                    | ✓         |
+| POST       | `/v1/tasks`                      | создать задачу (владелец — я)                                                | ✓         |
+| POST       | `/v1/tasks/extract`              | распознать черновик из текста/файла (multipart)                    | ✓         |
+| GET        | `/v1/tasks/{id}`                 | задача (только своя/общая)                                                     | ✓         |
+| PATCH      | `/v1/tasks/{id}/status`          | сменить статус                                                                         | ✓         |
+| GET        | `/v1/events`                     | мои + общие события                                                                  | ✓         |
+| POST       | `/v1/events`                     | создать занятый интервал                                                      | ✓         |
+| POST       | `/v1/schedule/rebuild`           | построить план                                                                         | ✓         |
+| GET        | `/v1/schedule/today`             | представление «сегодня»                                                       | ✓         |
+| POST       | `/v1/schedule/reorder-feedback`  | обучающий пример порядка                                                      | ✓         |
+| GET        | `/v1/integrations`               | статус адаптеров                                                                     | —         |
+| GET        | `/v1/integrations/lessons`       | занятия (недели, подгруппы, даты)                                         | —         |
+| GET        | `/v1/integrations/week`          | текущая учебная неделя                                                          | —         |
+| POST       | `/v1/integrations/sync`          | синхронизировать всё                                                             | —         |
+| POST       | `/v1/integrations/{name}/sync`   | синхронизировать адаптер (IIS, GoogleCalendar)                               | —         |
+| POST       | `/v1/integrations/import-file`   | импорт расписания группы из XLSX-файла (multipart: file, group_number) | —         |
+| GET        | `/v1/integrations/current-group` | группа, расписание которой сейчас показывается             | —         |
 
 Расписание — общее для всех пользователей, поэтому его эндпоинты без
 токена. Всё личное — только с токеном.
@@ -526,19 +610,19 @@ def test_my_service():
 ## Тесты и CI
 
 ```bash
-make api-test                        # 66 тестов
+make api-test                        # 99 тестов
 cd apps/web/frontend && npm run lint # линт фронта
 ```
 
 Покрытие по модулям:
 
-| Папка тестов | Что проверяет |
-|---|---|
-| `tests/knowledge` | правила базы знаний |
-| `tests/intelligence` | планировщик, окна бодрствования, скоринг и его границы |
-| `tests/integrations` | конвейер синхронизации, дедупликация, недели, появления, подгруппы, импорт файла |
-| `tests/auth` | регистрация/вход/токены, изоляция данных двух пользователей |
-| `tests/test_openapi_contract.py` | контракт в `packages/contracts` не потерял ключевые поля |
+| Папка тестов            | Что проверяет                                                                                                                            |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/knowledge`                | правила базы знаний                                                                                                                 |
+| `tests/intelligence`             | планировщик, окна бодрствования, скоринг и его границы                                                 |
+| `tests/integrations`             | конвейер синхронизации, дедупликация, недели, появления, подгруппы, импорт файла, распознавание черновика |
+| `tests/auth`                     | регистрация/вход/токены, изоляция данных двух пользователей                                      |
+| `tests/test_openapi_contract.py` | контракт в `packages/contracts` не потерял ключевые поля                                                             |
 
 CI (`.github/workflows/ci.yml`) на каждый пуш и PR: pytest backend'а
 на Python 3.12 + линт frontend'а на Node 22.
@@ -547,24 +631,41 @@ CI (`.github/workflows/ci.yml`) на каждый пуш и PR: pytest backend'�
 
 ## Переменные окружения
 
-| Переменная | Что делает | По умолчанию |
-|---|---|---|
-| `API_PORT` | порт API (меняйте, если 8000 занят) | `8000` |
-| `VITE_API_URL` | адрес API для фронтенда | `http://localhost:8000` |
-| `IIS_GROUP_NUMBER` | номер группы для синхронизации с порталом | пусто = синхронизация с портала выключена |
-| `SEMESTER_START_DATE` | дата начала семестра (от неё учебные недели 1–4) | `2026-09-01` |
-| `IIS_HORIZON_DAYS` | горизонт разворота занятий (28 = цикл недель) | `28` |
-| `INTEGRATION_CACHE_PATH` | SQLite-кэш синхронизации | `data/integration_cache.db` |
-| `INTEGRATIONS_BACKGROUND_SYNC_ENABLED` | фоновая синхронизация каждые 2 часа | `true` |
-| `AUTH_TOKEN_SECRET` | секрет подписи токенов (в проде — случайная строка!) | dev-строка |
-| `SCHEDULE_HORIZON_DAYS` | горизонт планировщика | `30` |
-| `SCHEDULE_SLOT_MINUTES` | шаг слота плана | `30` |
-| `WAKE_START_HOUR` / `WAKE_END_HOUR` | часы бодрствования | `8` / `23` |
-| `ML_RETRAIN_BATCH_SIZE` | пакет дообучения скоринга | `20` |
-| `ML_OVERDUE_BONUS` | бонус за завершение просроченной | `10` |
-| `DATABASE_URL` | подключение PostgreSQL | локальный дефолт |
-| `POSTGRES_AUTO_INIT_SCHEMA` | накатывать схему при старте | `true` |
-| `GOOGLE_CREDENTIALS_FILE` / `GOOGLE_TOKEN_FILE` | путь к OAuth-кредам Google Calendar | пусто |
+| Переменная                                | Что делает                                                                            | По умолчанию                                                      |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `API_PORT`                                        | порт API (меняйте, если 8000 занят)                                        | `8000`                                                                     |
+| `VITE_API_URL`                                    | адрес API для фронтенда                                                       | `http://localhost:8000`                                                    |
+| `IIS_GROUP_NUMBER`                                | номер группы для синхронизации с порталом                  | пусто = синхронизация с портала выключена |
+| `SEMESTER_START_DATE`                             | дата начала семестра (от неё учебные недели 1–4)          | `2026-09-01`                                                               |
+| `IIS_HORIZON_DAYS`                                | горизонт разворота занятий (28 = цикл недель)                | `28`                                                                       |
+| `INTEGRATION_CACHE_PATH`                          | SQLite-кэш синхронизации                                                       | `data/integration_cache.db`                                                |
+| `INTEGRATIONS_BACKGROUND_SYNC_ENABLED`            | фоновая синхронизация каждые 2 часа                              | `true`                                                                     |
+| `AUTH_TOKEN_SECRET`                               | секрет подписи токенов (в проде — случайная строка!) | dev-строка                                                             |
+| `SCHEDULE_HORIZON_DAYS`                           | горизонт планировщика                                                      | `30`                                                                       |
+| `SCHEDULE_SLOT_MINUTES`                           | шаг слота плана                                                                   | `30`                                                                       |
+| `WAKE_START_HOUR` / `WAKE_END_HOUR`             | часы бодрствования                                                            | `8` / `23`                                                               |
+| `ML_RETRAIN_BATCH_SIZE`                           | пакет дообучения скоринга                                               | `20`                                                                       |
+| `ML_OVERDUE_BONUS`                                | бонус за завершение просроченной                                  | `10`                                                                       |
+| `DATABASE_URL`                                    | подключение PostgreSQL                                                              | локальный дефолт                                              |
+| `POSTGRES_AUTO_INIT_SCHEMA`                       | накатывать схему при старте                                            | `true`                                                                     |
+| `GOOGLE_CREDENTIALS_FILE` / `GOOGLE_TOKEN_FILE` | путь к OAuth-кредам Google Calendar                                                 | пусто                                                                   |
+| `LOCAL_LLM_ENABLED`                              | включить распознавание задач локальной моделью                     | `true`                                                                     |
+| `LOCAL_LLM_BASE_URL`                             | адрес `llama-server`                                                                    | локально `http://localhost:8080`, в compose `http://llm:8080` |
+| `LOCAL_LLM_MODEL`                                | имя модели в запросах (`--alias` у llama-server)                     | `qwen3.5-4b`                                                               |
+| `LOCAL_LLM_TIMEOUT_SECONDS`                      | таймаут запроса к модели                                                     | `180`                                                                      |
+| `LOCAL_LLM_MAX_TOKENS`                           | максимум токенов ответа                                                          | `1024`                                                                     |
+| `LOCAL_LLM_TEMPERATURE`                          | температура генерации                                                              | `0.1`                                                                      |
+| `LOCAL_LLM_DISABLE_THINKING`                     | отключить reasoning Qwen (сразу JSON)                                     | `true`                                                                     |
+| `LOCAL_LLM_VISION_ENABLED`                       | разрешить распознавание изображений                                  | `true`                                                                     |
+| `LOCAL_LLM_MAX_TEXT_KB` / `LOCAL_LLM_MAX_IMAGE_MB` | лимиты текста и изображения                                         | `256` КБ / `10` МБ                                                   |
+| `LOCAL_LLM_MODEL_FILE` / `LOCAL_LLM_MMPROJ_FILE` | имена GGUF-файлов в `models/`                                               | `Qwen3.5-4B-UD-Q4_K_XL.gguf` / `mmproj-F16.gguf` |
+| `LOCAL_LLM_HF_REPO` / `LOCAL_LLM_HF_REVISION`    | откуда `make models` качает файлы                                     | `unsloth/Qwen3.5-4B-GGUF` + закреплённый commit |
+| `LOCAL_LLM_MODEL_PATH` / `LOCAL_LLM_MMPROJ_PATH` | явные пути к GGUF для `scripts/run-llama-server.sh`        | `models/<имя из файлов выше>`                                  |
+| `LLAMA_SERVER_BIN`                               | путь к собранному `llama-server` (локальный запуск)        | из `PATH`                                                                 |
+| `LOCAL_LLM_GPU_LAYERS`                           | сколько слоёв выгрузить на GPU (локальный запуск)          | `0` (CPU)                                                                 |
+| `LOCAL_LLM_HOST` / `LOCAL_LLM_PORT`              | адрес и порт `llama-server` (порт также публикует контейнер) | `0.0.0.0` / `8080`                                                     |
+| `LOCAL_LLM_CTX_SIZE`                             | размер контекста                                                                    | `8192`                                                                     |
+| `LOCAL_LLM_IMAGE_MIN_TOKENS`                     | минимум токенов на изображение (Qwen-VL)                      | `1024`                                                                     |
 
 ---
 
@@ -602,26 +703,73 @@ CI (`.github/workflows/ci.yml`) на каждый пуш и PR: pytest backend'�
 - **Почему импорт файла через тот же конвейер.** Отдельный код импорта
   гарантированно разошёлся бы с онлайн-синхронизацией. Один парсер
   (`tasks_from_iis_payload`) — одинаковая семантика из любого источника.
+- **Почему распознавание задачи живёт в `integrations`.** Локальная LLM —
+  такой же внешний источник, как портал или Google: остальной backend не
+  должен знать деталей его API. Модуль отдаёт только черновик `TaskDraft`,
+  а сохранение остаётся за `knowledge`. Модель можно выключить
+  (`LOCAL_LLM_ENABLED=false`), и остальные сценарии продолжат работать.
+- **Почему модели не в git, а скачиваются.** GGUF-файлы весят 3.4 ГБ;
+  GitHub отклоняет файлы больше 100 МБ, а бесплатный Git LFS (1 ГБ) их не
+  вмещает. Поэтому в git лежат только `scripts/models.lock` с ревизией
+  Hugging Face и SHA256, а `make models` скачивает те же файлы на любом ПК.
+  Это воспроизводимее, чем «у меня модель есть, а у тебя нет», и не
+  раздувает историю репозитория.
 
 ---
 
 ## Если что-то не работает
 
-| Симптом | Причина и решение |
-|---|---|
+| Симптом                                                                  | Причина и решение                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `failed to resolve source metadata ... registry-1.docker.io: DNS/i-o timeout` | Docker Hub недоступен из сети: проверьте DNS (`nslookup registry-1.docker.io 8.8.8.8`; при проблеме — `nameserver 8.8.8.8` в `/etc/resolv.conf`), либо добавьте зеркало в Docker Engine: `"registry-mirrors": ["https://mirror.gcr.io"]`, либо запустите без Docker (`make api-dev` + `make web-dev` — in-memory фолбэк работает без Postgres) |
-| `Bind for 0.0.0.0:8000 failed: port is already allocated` | порт занят (проверьте `docker ps`, `ss -tlnp \| grep :8000`) → `API_PORT=8010` в `.env` |
-| Фронт пустой, «Не удалось загрузить...» | фронт не видит API: проверьте `VITE_API_URL` и что API отвечает на `/health` |
-| Расписание пустое | нет `IIS_GROUP_NUMBER` в `.env` или нет доступа к порталу → кнопка «Загрузить из файла» или добавить группу и перезапустить |
-| `соединение с базой` в логах при старте | Postgres не поднят → API перейдёт на in-memory (данные до перезапуска); для постоянных данных `docker compose up` |
-| Google Calendar не появляется в списке адаптеров | нужен `credentials.json` (Google Cloud Console) по пути `GOOGLE_CREDENTIALS_FILE` |
-| Клоны занятий в расписании | устаревший кэш → удалить `data/integration_cache.db` и нажать «Обновить с портала» |
+| `permission denied ... /var/run/docker.sock` | пользователь не в группе `docker` → `sudo usermod -aG docker $USER`, затем перелогиниться (или запускать Docker через `sudo`) |
+| `Bind for 0.0.0.0:8000 failed: port is already allocated`                     | порт занят (проверьте `docker ps`, `ss -tlnp \| grep :8000`) → `API_PORT=8010` в `.env`                                                                                                                                                                                                                                                                                                                                     |
+| Фронт пустой, «Не удалось загрузить...»          | фронт не видит API: проверьте `VITE_API_URL` и что API отвечает на `/health`                                                                                                                                                                                                                                                                                                                                    |
+| Расписание пустое                                               | нет `IIS_GROUP_NUMBER` в `.env` или нет доступа к порталу → кнопка «Загрузить из файла» или добавить группу и перезапустить                                                                                                                                                                                                                                       |
+| `соединение с базой` в логах при старте        | Postgres не поднят → API перейдёт на in-memory (данные до перезапуска); для постоянных данных `docker compose up`                                                                                                                                                                                                                                                                           |
+| Google Calendar не появляется в списке адаптеров    | нужен `credentials.json` (Google Cloud Console) по пути `GOOGLE_CREDENTIALS_FILE`                                                                                                                                                                                                                                                                                                                                                       |
+| Клоны занятий в расписании                               | устаревший кэш → удалить `data/integration_cache.db` и нажать «Обновить с портала»                                                                                                                                                                                                                                                                                                                     |
+| «Локальная модель недоступна» при распознавании | не запущен `llama-server` или неверный `LOCAL_LLM_BASE_URL` → в Docker: `docker compose ps`, `docker compose logs llm`, адрес API — `http://llm:8080`; локально: `make llm-dev` и `curl --noproxy '*' http://localhost:8080/health` |
+| Фото не распознаются, текст — да                 | `llama-server` запущен без `mmproj` → проверьте `LOCAL_LLM_MMPROJ_FILE`, пересоздайте контейнер: `docker compose up -d --force-recreate llm`; локально — `make models` |
+| `make models` не скачивает модели | нет сети/мешает прокси → повторите команду (скачивание продолжится с `.part`); проверьте `curl -I https://huggingface.co`, при необходимости задайте `HTTPS_PROXY` |
 
 ---
 
 ## Дневник работы
 
 Живой журнал ключевых решений. Новые записи — сверху.
+
+### 03.11.2026 — Docker-запуск llama-server и автозагрузка моделей
+
+- `llm` — отдельный сервис в docker-compose на официальном CPU-образе
+  `ghcr.io/ggml-org/llama.cpp:server`; API ходит на `http://llm:8080`.
+  Весь проект поднимается одинаково на любом ПК: `make up`.
+- Модели не коммитятся: они весят 3.4 ГБ, а GitHub не принимает файлы
+  больше 100 МБ (бесплатный Git LFS тоже меньше). `make models` скачивает
+  `Qwen3.5-4B-UD-Q4_K_XL.gguf` и `mmproj-F16.gguf` из закреплённой ревизии
+  `unsloth/Qwen3.5-4B-GGUF` и сверяет SHA256 по `scripts/models.lock`.
+  `make up` и `make llm-dev` вызывают загрузку автоматически.
+- Локальный запуск без Docker остался: `make llm-dev` (нужен собранный
+  `llama-server` в `PATH`).
+
+### 03.11.2026 — задачи из фото и текста (локальная Qwen3.5 4B)
+
+- На странице «Задачи» появилась кнопка «Добавить по фото или тексту»:
+  пользователь вставляет текст или выбирает текстовый файл/изображение,
+  локальная модель возвращает черновик, форму можно сразу отправить
+  («Добавить сразу») или поправить («Исправить в форме»).
+- Новый `POST /v1/tasks/extract` (multipart, с токеном) живёт в
+  `integrations`: `TaskDraftExtractor` проверяет файл по сигнатуре,
+  декодирует UTF-8/CP1251, отправляет запрос в `llama-server`
+  (OpenAI-совместимый `/v1/chat/completions`, JSON-режим, thinking off)
+  и нормализует поля. Черновик не сохраняется — это делает обычный
+  `POST /v1/tasks` после подтверждения.
+- Запуск модели: `make llm-dev` → `scripts/run-llama-server.sh`
+  (Qwen3.5 4B + `mmproj`, `--jinja`, настройка GPU-слоёв). В Docker
+  backend ходит на `host.docker.internal:8080`; локально — на
+  `localhost:8080`. Все параметры — через `LOCAL_LLM_*`.
+- Добавлены тесты извлечения, клиента llama-server и контракта; всего
+  99 тестов.
 
 ### 26.10.2026 — календарь месяца и расписание по группе пользователя
 
@@ -690,13 +838,11 @@ CI (`.github/workflows/ci.yml`) на каждый пуш и PR: pytest backend'�
 ### 28.10.2026 — расписание одной группы, XLSX-импорт, настройки интерфейса
 
 - Расписание показывается только для текущей группы (последний ввод
-  номера или импорт файла): группа помечается у каждой записи, `GET
-  /v1/integrations/current-group` отдаёт её фронту, под заголовком
+  номера или импорт файла): группа помечается у каждой записи, `GET /v1/integrations/current-group` отдаёт её фронту, под заголовком
   «Расписание» подписана группа. Импорт полностью заменяет прежнее
   расписание — смешивания групп больше нет; выбранная группа
   переживает перезапуск API.
-- Импорт из файла переведён с JSON на XLSX: `POST
-  /v1/integrations/import-file` (multipart), парсер `xlsx_import.py`
+- Импорт из файла переведён с JSON на XLSX: `POST /v1/integrations/import-file` (multipart), парсер `xlsx_import.py`
   понимает табличный макет и «день недели заголовком», группу берёт
   из файла или из поля ввода.
 - Из ветки коллеги `integration_module2` взяты удавшиеся решения:
@@ -752,13 +898,13 @@ PostgreSQL и API-клиенты; `integration_module` — синхрониза�
 
 ## Командная работа
 
-| Зона | Путь |
-|---|---|
-| Данные и правила | `apps/api/app/modules/knowledge` |
-| Вход и аккаунты | `apps/api/app/modules/auth` |
+| Зона                          | Путь                              |
+| --------------------------------- | ------------------------------------- |
+| Данные и правила    | `apps/api/app/modules/knowledge`    |
+| Вход и аккаунты      | `apps/api/app/modules/auth`         |
 | Внешние источники | `apps/api/app/modules/integrations` |
-| Планировщик и ML | `apps/api/app/modules/intelligence` |
-| Интерфейс | `apps/web/frontend` |
+| Планировщик и ML      | `apps/api/app/modules/intelligence` |
+| Интерфейс                | `apps/web/frontend`                 |
 
 Ветки и PR — `docs/git-workflow.md`, роли — `docs/team-workflow.md`,
 детали модулей — `docs/`, контракт API — `packages/contracts/openapi.yaml`.

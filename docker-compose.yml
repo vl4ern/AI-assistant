@@ -14,13 +14,31 @@ services:
       IIS_GROUP_NUMBER: ${IIS_GROUP_NUMBER:-}
       INTEGRATION_CACHE_PATH: ${INTEGRATION_CACHE_PATH:-data/integration_cache.db}
       INTEGRATIONS_BACKGROUND_SYNC_ENABLED: ${INTEGRATIONS_BACKGROUND_SYNC_ENABLED:-true}
+      LOCAL_LLM_ENABLED: ${LOCAL_LLM_ENABLED:-true}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-http://llm:8080}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-qwen3.5-4b}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      LOCAL_LLM_TIMEOUT_SECONDS: ${LOCAL_LLM_TIMEOUT_SECONDS:-180}
+      LOCAL_LLM_MAX_TOKENS: ${LOCAL_LLM_MAX_TOKENS:-1024}
+      LOCAL_LLM_TEMPERATURE: ${LOCAL_LLM_TEMPERATURE:-0.1}
+      LOCAL_LLM_DISABLE_THINKING: ${LOCAL_LLM_DISABLE_THINKING:-true}
+      LOCAL_LLM_VISION_ENABLED: ${LOCAL_LLM_VISION_ENABLED:-true}
+      LOCAL_LLM_MAX_TEXT_KB: ${LOCAL_LLM_MAX_TEXT_KB:-256}
+      LOCAL_LLM_MAX_IMAGE_MB: ${LOCAL_LLM_MAX_IMAGE_MB:-10}
+    # Нужно, только если API в Docker должен ходить к llama-server на хосте
+    # (LOCAL_LLM_BASE_URL=http://host.docker.internal:8080).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
       - ./apps/api:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
-      - postgres
+      postgres:
+        condition: service_started
+      llm:
+        condition: service_healthy
 
   web:
     build:
@@ -36,6 +54,38 @@ services:
     command: npm run dev -- --host 0.0.0.0 --port 5173
     depends_on:
       - api
+
+  llm:
+    # Официальный CPU-образ llama.cpp: работает одинаково на Linux/Windows/macOS.
+    # Для NVIDIA можно заменить на ghcr.io/ggml-org/llama.cpp:server-cuda
+    # и добавить gpus: all (нужен NVIDIA Container Toolkit).
+    image: ghcr.io/ggml-org/llama.cpp:server
+    environment:
+      LLAMA_ARG_HOST: 0.0.0.0
+      LLAMA_ARG_PORT: 8080
+    command:
+      - --model
+      - /models/${LOCAL_LLM_MODEL_FILE:-Qwen3.5-4B-UD-Q4_K_XL.gguf}
+      - --mmproj
+      - /models/${LOCAL_LLM_MMPROJ_FILE:-mmproj-F16.gguf}
+      - --alias
+      - ${LOCAL_LLM_MODEL:-qwen3.5-4b}
+      - --ctx-size
+      - ${LOCAL_LLM_CTX_SIZE:-8192}
+      - --image-min-tokens
+      - ${LOCAL_LLM_IMAGE_MIN_TOKENS:-1024}
+      - --jinja
+    volumes:
+      - ./models:/models:ro
+    ports:
+      - "${LOCAL_LLM_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 120
+      start_period: 30s
+    restart: unless-stopped
 
   postgres:
     image: postgres:16-alpine

@@ -27,6 +27,10 @@ apps/web/frontend/node_modules/
 .env.*
 !.env.example
 
+# Локальные GGUF-модели (llama-server)
+models/*
+!models/README.md
+
 # Integration cache and credentials
 data/
 apps/api/data/

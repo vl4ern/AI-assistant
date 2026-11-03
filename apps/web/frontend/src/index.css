@@ -362,6 +362,34 @@ button {
   font-size: 13px;
 }
 
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ai-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: linear-gradient(180deg, rgba(91, 140, 255, 0.2) 0%, rgba(42, 82, 192, 0.2) 100%);
+  border-color: rgba(91, 140, 255, 0.45);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.ai-button:hover {
+  background: linear-gradient(180deg, rgba(91, 140, 255, 0.3) 0%, rgba(42, 82, 192, 0.3) 100%);
+  border-color: var(--accent);
+}
+
+.ai-spark {
+  font-size: 14px;
+  line-height: 1;
+}
+
 .empty {
   color: var(--text-soft);
   padding: 10px 0;
@@ -429,6 +457,271 @@ button {
 
 textarea.input {
   resize: vertical;
+}
+
+/* ---------- Импорт задачи из текста/фото ---------- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(2, 6, 18, 0.74);
+  backdrop-filter: blur(7px) saturate(1.15);
+  animation: fade-in 0.18s var(--ease) both;
+}
+
+.modal-card {
+  width: min(620px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  display: grid;
+  gap: 16px;
+  padding: 24px;
+  border: 1px solid var(--border-bright);
+  border-radius: 20px;
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  box-shadow: var(--shadow-2), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  animation: rise 0.25s var(--ease) both;
+}
+
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+
+.modal-subtitle {
+  margin: 6px 0 0;
+  color: var(--text-soft);
+  font-size: 13.5px;
+  max-width: 48ch;
+}
+
+.modal-close {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-3);
+  color: var(--text-soft);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.18s var(--ease);
+}
+
+.modal-close:hover {
+  color: var(--text);
+  border-color: var(--border-bright);
+  transform: translateY(-1px);
+}
+
+.extract-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-glow-2);
+}
+
+.extract-tab {
+  padding: 9px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: all 0.18s var(--ease);
+}
+
+.extract-tab:hover {
+  color: var(--text);
+}
+
+.extract-tab.active {
+  background: var(--surface-3);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.extract-textarea {
+  min-height: 150px;
+  resize: vertical;
+}
+
+.extract-dropzone {
+  display: grid;
+  gap: 6px;
+  padding: 26px 18px;
+  border: 1px dashed var(--border-bright);
+  border-radius: 14px;
+  background: rgba(7, 13, 31, 0.35);
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.18s var(--ease);
+}
+
+.extract-dropzone:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.extract-dropzone input {
+  display: none;
+}
+
+.extract-dropzone-title {
+  color: var(--text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.extract-dropzone-hint {
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+
+.extract-preview-image {
+  justify-self: center;
+  max-width: 100%;
+  max-height: 220px;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(7, 13, 31, 0.5);
+}
+
+.extract-note {
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.extract-draft {
+  display: grid;
+  gap: 13px;
+}
+
+.extract-draft-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.extract-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border: 1px solid rgba(78, 208, 127, 0.3);
+  border-radius: 99px;
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.extract-source {
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+
+.extract-draft-title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.extract-draft-description {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 14px;
+  white-space: pre-wrap;
+}
+
+.extract-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.extract-facts > div {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.extract-facts span {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.extract-facts strong {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.extract-warnings {
+  margin: 0;
+  padding: 10px 12px 10px 28px;
+  border: 1px solid rgba(255, 198, 92, 0.3);
+  border-radius: 12px;
+  background: rgba(255, 198, 92, 0.08);
+  color: var(--warn);
+  font-size: 12.5px;
+  display: grid;
+  gap: 3px;
+}
+
+@media (max-width: 560px) {
+  .modal-backdrop {
+    padding: 12px;
+  }
+
+  .modal-card {
+    max-height: calc(100vh - 24px);
+    padding: 18px;
+  }
+
+  .modal-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .modal-actions .button {
+    width: 100%;
+  }
 }
 
 /* ---------- Кнопки ---------- */
@@ -1076,6 +1369,15 @@ textarea.input {
 }
 
 /* ---------- Анимации ---------- */
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
 
 @keyframes rise {
   from {

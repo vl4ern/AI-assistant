@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.modules.integrations.models.extraction import TaskDraft
+
 
 class IntegrationSyncResult(BaseModel):
     provider: str = Field(..., description="Integration provider name")

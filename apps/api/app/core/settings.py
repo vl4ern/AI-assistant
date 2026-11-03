@@ -51,5 +51,37 @@ class AppSettings(BaseModel):
         default=int(os.getenv("IIS_HORIZON_DAYS", "28")), ge=7, le=60
     )
 
+    # Локальная модель (llama-server, OpenAI-совместимый API).
+    local_llm_enabled: bool = os.getenv("LOCAL_LLM_ENABLED", "true").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    local_llm_base_url: str = os.getenv("LOCAL_LLM_BASE_URL", "http://localhost:8080")
+    local_llm_model: str = os.getenv("LOCAL_LLM_MODEL", "qwen3.5-4b")
+    local_llm_api_key: str = os.getenv("LOCAL_LLM_API_KEY", "")
+    local_llm_timeout_seconds: int = Field(
+        default=int(os.getenv("LOCAL_LLM_TIMEOUT_SECONDS", "180")), ge=5, le=600
+    )
+    local_llm_max_tokens: int = Field(
+        default=int(os.getenv("LOCAL_LLM_MAX_TOKENS", "1024")), ge=64, le=8192
+    )
+    local_llm_temperature: float = Field(
+        default=float(os.getenv("LOCAL_LLM_TEMPERATURE", "0.1")), ge=0, le=2
+    )
+    local_llm_disable_thinking: bool = os.getenv(
+        "LOCAL_LLM_DISABLE_THINKING", "true"
+    ).lower() in {"1", "true", "yes", "on"}
+    local_llm_vision_enabled: bool = os.getenv(
+        "LOCAL_LLM_VISION_ENABLED", "true"
+    ).lower() in {"1", "true", "yes", "on"}
+    local_llm_max_text_kb: int = Field(
+        default=int(os.getenv("LOCAL_LLM_MAX_TEXT_KB", "256")), ge=1, le=4096
+    )
+    local_llm_max_image_mb: int = Field(
+        default=int(os.getenv("LOCAL_LLM_MAX_IMAGE_MB", "10")), ge=1, le=50
+    )
+
 
 settings = AppSettings()

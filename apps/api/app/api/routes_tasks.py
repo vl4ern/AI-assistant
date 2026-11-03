@@ -1,12 +1,45 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.api.deps import get_current_user
 from app.container import container
+from app.core.settings import settings
 from app.modules.auth.models import UserPublic
+from app.modules.integrations.integration.task_extraction import TaskExtractionError
+from app.modules.integrations.models import TaskDraft
 from app.modules.knowledge.models import Event, EventCreate, Task, TaskCreate, TaskStatusUpdate
 from app.modules.knowledge.rules import KnowledgeRuleViolation
 
 router = APIRouter(prefix="/v1", tags=["tasks"])
+
+UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+def _upload_limit() -> int:
+    """Максимальный размер загружаемого файла с небольшим запасом."""
+    return max(
+        settings.local_llm_max_image_mb * 1024 * 1024,
+        settings.local_llm_max_text_kb * 1024,
+    ) + 1
+
+
+async def _read_upload_limited(file: UploadFile, limit: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(UPLOAD_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    "Файл слишком большой. Увеличьте LOCAL_LLM_MAX_IMAGE_MB "
+                    "или загрузите файл меньшего размера."
+                ),
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _ensure_can_access(item: Task, user: UserPublic) -> None:
@@ -29,6 +62,39 @@ def create_task(
         return container.knowledge_service.create_task(payload)
     except KnowledgeRuleViolation as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/tasks/extract", response_model=TaskDraft)
+async def extract_task_draft(
+    text: str = Form(""),
+    file: UploadFile | None = File(default=None),
+    user: UserPublic = Depends(get_current_user),
+) -> TaskDraft:
+    """
+    Распознать черновик задачи из текста или файла (локальная LLM).
+
+    Черновик не сохраняется: пользователь проверяет/правит его и отправляет
+    обычный POST /v1/tasks. Так данные по-прежнему принадлежат knowledge.
+    """
+    del user  # зависимость нужна только для проверки токена
+
+    file_content: bytes | None = None
+    filename = ""
+    content_type = ""
+    if file is not None:
+        file_content = await _read_upload_limited(file, _upload_limit())
+        filename = file.filename or ""
+        content_type = file.content_type or ""
+
+    try:
+        return container.integration_service.extract_task_draft(
+            text=text,
+            file_content=file_content,
+            filename=filename,
+            content_type=content_type,
+        )
+    except TaskExtractionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 @router.patch("/tasks/{task_id}/status", response_model=Task)
