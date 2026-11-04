@@ -88,16 +88,22 @@ paths:
                   type: string
                   default: ""
                 file:
-                  type: string
-                  format: binary
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  description: >-
+                    Текстовый файл (TXT, MD, CSV, JSON, PDF) или изображение
+                    (JPG, PNG, WebP, GIF, BMP). Можно передать несколько файлов
+                    (до 3) и текст за один раз.
               description: Нужен хотя бы один из параметров text или file.
       responses:
         "200":
-          description: Extracted task draft
+          description: Extracted task draft(s)
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TaskDraft"
+                $ref: "#/components/schemas/TaskDrafts"
         "400":
           description: Empty or unsupported input
           content:
@@ -399,6 +405,25 @@ components:
           default: []
       required:
         - title
+
+    TaskDrafts:
+      type: object
+      description: >-
+        Набор черновиков задач, распознанных локальной моделью. Массивом
+        возвращается одна задача или несколько независимых задач. Черновик
+        не является фактом базы знаний, пока пользователь не отправит его в
+        POST /v1/tasks.
+      properties:
+        tasks:
+          type: array
+          description: >-
+            Один или несколько черновиков. Порядок совпадает с порядком задач
+            в ответе модели.
+          items:
+            $ref: "#/components/schemas/TaskDraft"
+          default: []
+      required:
+        - tasks
 
     TaskStatus:
       type: string

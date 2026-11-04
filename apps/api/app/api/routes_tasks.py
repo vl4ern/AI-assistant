@@ -1,11 +1,16 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.api.deps import get_current_user
 from app.container import container
 from app.core.settings import settings
 from app.modules.auth.models import UserPublic
-from app.modules.integrations.integration.task_extraction import TaskExtractionError
-from app.modules.integrations.models import TaskDraft
+from app.modules.integrations.integration.task_extraction import (
+    TaskExtractFile,
+    TaskExtractionError,
+)
+from app.modules.integrations.models import TaskDrafts
 from app.modules.knowledge.models import Event, EventCreate, Task, TaskCreate, TaskStatusUpdate
 from app.modules.knowledge.rules import KnowledgeRuleViolation
 
@@ -64,34 +69,38 @@ def create_task(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/tasks/extract", response_model=TaskDraft)
+@router.post("/tasks/extract", response_model=TaskDrafts)
 async def extract_task_draft(
     text: str = Form(""),
-    file: UploadFile | None = File(default=None),
+    file: Optional[list[UploadFile]] = File(default=None),
     user: UserPublic = Depends(get_current_user),
-) -> TaskDraft:
+) -> TaskDrafts:
     """
-    Распознать черновик задачи из текста или файла (локальная LLM).
+    Распознать черновики задач из текста и файлов (локальная LLM).
 
-    Черновик не сохраняется: пользователь проверяет/правит его и отправляет
-    обычный POST /v1/tasks. Так данные по-прежнему принадлежат knowledge.
+    Модель возвращает один черновик (одна задача) или несколько
+    (несколько независимых задач — например, несколько лабораторных).
+    Черновики не сохраняются: пользователь проверяет/правирует их и
+    отправляет обычный POST /v1/tasks. Так данные по-прежнему принадлежат
+    knowledge.
     """
     del user  # зависимость нужна только для проверки токена
 
-    file_content: bytes | None = None
-    filename = ""
-    content_type = ""
-    if file is not None:
-        file_content = await _read_upload_limited(file, _upload_limit())
-        filename = file.filename or ""
-        content_type = file.content_type or ""
+    upload_files: list[TaskExtractFile] = []
+    if file:
+        for upload in file:
+            upload_files.append(
+                TaskExtractFile(
+                    filename=upload.filename or "",
+                    content_type=upload.content_type or "",
+                    content=await _read_upload_limited(upload, _upload_limit()),
+                )
+            )
 
     try:
         return container.integration_service.extract_task_draft(
             text=text,
-            file_content=file_content,
-            filename=filename,
-            content_type=content_type,
+            files=upload_files,
         )
     except TaskExtractionError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc

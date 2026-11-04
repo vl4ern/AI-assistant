@@ -18,7 +18,6 @@ import { rebuildSchedule } from './api/schedule';
 import type { SchedulePlan } from './api/schedule';
 import { createTask as createTaskApi, getTasks, updateTaskStatus } from './api/tasks';
 import { TaskExtractPanel } from './components/TaskExtractPanel';
-import { splitDraftDeadline } from './taskDraft';
 import type { ApiTask, ApiTaskCreate, ApiTaskDraft, ApiTaskStatus } from './types/api';
 import { SettingsProvider } from './settings-provider';
 import { useSettings } from './settings';
@@ -783,7 +782,6 @@ function TasksPage({
   const [description, setDescription] = useState('');
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [draftNotice, setDraftNotice] = useState('');
 
   const activeTasks = tasks.filter((task) => ['todo', 'in_progress', 'blocked'].includes(task.status));
 
@@ -800,7 +798,6 @@ function TasksPage({
     try {
       await onCreate(payload);
       resetForm();
-      setDraftNotice('');
     } catch (createError) {
       setError(getErrorMessage(createError));
       throw createError;
@@ -826,21 +823,6 @@ function TasksPage({
     }
   }
 
-  function applyDraft(draft: ApiTaskDraft) {
-    const { date, time } = splitDraftDeadline(draft.deadline);
-    setTitle(draft.title);
-    setPriority(String(draft.priority));
-    setEstimate(String(draft.estimated_minutes));
-    setDeadlineDate(date);
-    setDeadlineTime(time);
-    setDescription(draft.description ?? '');
-    setDraftNotice(t('tasks.extract.fillForm'));
-    setError('');
-    document
-      .getElementById('task-form-card')
-      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
-
   return (
     <section className="page">
       <h1 className="page-title">{t('tasks.title')}</h1>
@@ -849,9 +831,8 @@ function TasksPage({
       <div className="card" id="task-form-card">
         <div className="card-head">
           <h3 className="card-title">{t('tasks.new')}</h3>
-          <TaskExtractPanel onCreate={submitTask} onUseDraft={applyDraft} />
+          <TaskExtractPanel onCreate={submitTask} />
         </div>
-        {draftNotice && <div className="notice">{draftNotice}</div>}
         <div className="form-grid">
           <label className="field span-2">
             <span>{t('tasks.what')}</span>

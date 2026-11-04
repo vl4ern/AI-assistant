@@ -50,3 +50,7 @@ export type ApiTaskDraft = {
   input_kind: 'text' | 'image';
   warnings: string[];
 };
+
+export type ApiTaskDrafts = {
+  tasks: ApiTaskDraft[];
+};

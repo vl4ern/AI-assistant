@@ -1,0 +1,22 @@
+# GPU-режим для NVIDIA. Запуск: make up-gpu
+#
+# Требуется NVIDIA Container Toolkit:
+#   sudo pacman -S nvidia-container-toolkit
+#   sudo nvidia-ctk runtime configure --runtime=docker
+#   sudo systemctl restart docker
+#
+# Это дополнение к docker-compose.yml: CPU-запуск (`make up`) не меняется.
+services:
+  llm:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    gpus: all
+    environment:
+      # Сколько слоёв модели выгрузить в VRAM.
+      # Для GTX 1650 4 ГБ начните с 12–20: полный оффлоад 4B-модели
+      # вместе с mmproj в 4 ГБ не помещается.
+      # С контекстом 16k (LLM_CTX_SIZE) KV-cache занимает больше памяти,
+      # на GPU с малой VRAM может потребоваться меньше слоёв.
+      LLAMA_ARG_N_GPU_LAYERS: "${LOCAL_LLM_GPU_LAYERS:-20}"
+      # Держим мультимодальный проектор на CPU, чтобы сэкономить VRAM.
+      # На GPU с большим объёмом памяти можно поставить true.
+      LLAMA_ARG_MMPROJ_OFFLOAD: "${LOCAL_LLM_MMPROJ_OFFLOAD:-false}"

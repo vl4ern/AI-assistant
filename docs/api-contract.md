@@ -9,7 +9,7 @@
 
 - `GET /v1/tasks` — список задач.
 - `POST /v1/tasks` — создать задачу.
-- `POST /v1/tasks/extract` — распознать черновик задачи из текста или файла (multipart).
+- `POST /v1/tasks/extract` — распознать черновики задач из текста и файлов (multipart, до 3 файлов).
 - `PATCH /v1/tasks/{task_id}/status` — изменить статус.
 - `GET /v1/events` — список занятых событий.
 - `POST /v1/events` — создать событие.
@@ -28,34 +28,54 @@
 - `allow_split: bool` (по умолчанию `false`)
 - `min_chunk_minutes: int | null` (15..1440)
 
-### TaskDraft (черновик распознавания)
+### TaskDraft / TaskDrafts (черновик(и) распознавания)
 
 `POST /v1/tasks/extract` принимает `multipart/form-data`:
 
 - `text: string` (необязательное, по умолчанию пустое)
-- `file: binary` (необязательное; TXT, MD, CSV, JSON, JPG, PNG, WebP, GIF, BMP)
+- `file: array of binary` (необязательное; TXT, MD, CSV, JSON, PDF, JPG, PNG, WebP, GIF, BMP).
+  Можно передать сразу несколько файлов (лимит — до 3, см. `LOCAL_LLM_MAX_FILES`).
 
 Нужен хотя бы один из параметров `text` или `file`. Размер задаётся
 `LOCAL_LLM_MAX_TEXT_KB` и `LOCAL_LLM_MAX_IMAGE_MB`.
 
-Ответ — черновик, который **не сохраняется** в базе знаний. Чтобы создать
-задачу, пользователь отправляет его (после проверки/правки) обычным
-`POST /v1/tasks`.
+Ответ — набор черновиков `TaskDrafts` с полем `tasks` (массив):
 
-- `title: string` (1..200)
-- `description: string | null`
-- `estimated_minutes: int` (15..1440, по умолчанию `60`)
-- `priority: int` (1..4, по умолчанию `3`)
-- `deadline: datetime | null`
-- `workspace_id: string` (`study` / `personal`, по умолчанию `study`)
-- `project_id: string | null`
-- `input_kind: "text" | "image"` — что именно распознавали
-- `warnings: string[]` — поля, которые модель вернула некорректно и backend
-  поправил автоматически
+```json
+{
+  "tasks": [
+    {
+      "title": "короткое название задачи",
+      "description": "детали или null",
+      "estimated_minutes": 60,
+      "priority": 3,
+      "deadline": "YYYY-MM-DDTHH:MM:SS или null",
+      "workspace_id": "study",
+      "project_id": "oop или null",
+      "input_kind": "text",
+      "warnings": []
+    }
+  ]
+}
+```
 
-Ошибки: `400` — пустой/неподдерживаемый ввод, `413` — файл больше лимита,
-`502` — модель вернула некорректный ответ, `503` — `llama-server` недоступен
-или распознавание отключено (`LOCAL_LLM_ENABLED=false`).
+Массив `tasks` содержит одну задачу или несколько независимых задач
+(например, несколько лабораторных из одного текста/файла). Модель сама
+определяет, что из материала следует одна задача, а что — несколько; она
+не дробит одну задачу на подзадачи, а возвращает самостоятельные задачи.
+
+Чтобы создать задачу, пользователь отправляет её (после проверки/правки)
+обычным `POST /v1/tasks`.
+
+- `tasks: TaskDraft[]` — распознанные черновики (от одного до нескольких).
+  Каждый черновик содержит те же поля, что и раньше: `title`, `description`,
+  `estimated_minutes`, `priority`, `deadline`, `workspace_id`, `project_id`,
+  `input_kind`, `warnings`.
+- `TaskDraft` — отдельный черновик (элемент массива `tasks`).
+
+Ошибки: `400` — пустой/неподдерживаемый ввод, превышен лимит файлов,
+`413` — файл больше лимита, `502` — модель вернула некорректный ответ,
+`503` — `llama-server` недоступен или распознавание отключено (`LOCAL_LLM_ENABLED=false`).
 
 ### TaskStatus
 

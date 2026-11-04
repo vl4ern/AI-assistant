@@ -40,6 +40,24 @@ def test_contract_contains_task_extraction_endpoint() -> None:
     assert "warnings" in draft_props
     assert draft_props["input_kind"]["enum"] == ["text", "image"]
 
+    drafts_props = (
+        contract["components"]["schemas"]["TaskDrafts"]["properties"]
+    )
+    assert "tasks" in drafts_props
+    assert drafts_props["tasks"]["type"] == "array"
+    assert drafts_props["tasks"]["items"]["$ref"] == "#/components/schemas/TaskDraft"
+
+
+def test_contract_task_extraction_accepts_several_files() -> None:
+    contract = _load_contract()
+
+    path = contract["paths"]["/v1/tasks/extract"]["post"]
+    request_schema = path["requestBody"]["content"]["multipart/form-data"]["schema"]
+    file_prop = request_schema["properties"]["file"]
+    assert "files" not in file_prop
+    assert file_prop["type"] == "array"
+    assert file_prop["items"]["format"] == "binary"
+
     assert contract["components"]["securitySchemes"]["bearerAuth"]["scheme"] == "bearer"
 
 

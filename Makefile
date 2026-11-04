@@ -5,7 +5,7 @@ export
 
 API_PORT ?= 8000
 
-.PHONY: api-install api-dev api-test models llm-dev web-install web-dev web-lint up logs compose-up compose-down
+.PHONY: api-install api-dev api-test models llm-dev web-install web-dev web-lint up logs compose-up compose-down up-gpu down-gpu compose-up-gpu compose-down-gpu detect-gpu
 
 api-install:
 	python3 -m venv .venv && ./.venv/bin/pip install -r apps/api/requirements-dev.txt
@@ -18,6 +18,12 @@ api-test:
 
 models:
 	./scripts/download-models.sh
+
+detect-gpu:
+	./scripts/detect-gpu.sh
+
+detect-gpu-apply:
+	./scripts/detect-gpu.sh --apply
 
 llm-dev: models
 	./scripts/run-llama-server.sh
@@ -34,6 +40,9 @@ web-lint:
 up: models
 	docker compose up -d --build
 
+up-gpu: models
+	docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+
 logs:
 	docker compose logs -f api llm
 
@@ -42,3 +51,12 @@ compose-up: models
 
 compose-down:
 	docker compose down
+
+compose-up-gpu: models
+	docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+
+compose-down-gpu:
+	docker compose -f docker-compose.yml -f docker-compose.gpu.yml down
+
+down-gpu:
+	docker compose -f docker-compose.yml -f docker-compose.gpu.yml down

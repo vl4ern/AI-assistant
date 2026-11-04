@@ -12,6 +12,7 @@ from app.modules.integrations.integration.kb_bridge import (
 from app.modules.integrations.integration.interfaces import IServiceAdapter
 from app.modules.integrations.integration.task_extraction import (
     TaskDraftExtractor,
+    TaskExtractFile,
     TaskExtractionError,
 )
 from app.modules.integrations.integration.retry_queue import RetryQueue
@@ -20,7 +21,7 @@ from app.modules.integrations.models import (
     IntegrationAdapterStatus,
     IntegrationSyncResult,
     Lesson,
-    TaskDraft,
+    TaskDrafts,
     WeekInfo,
 )
 from app.modules.integrations.models.iis_models import academic_week
@@ -431,15 +432,17 @@ class IntegrationService:
         self,
         *,
         text: str = "",
-        file_content: bytes | None = None,
-        filename: str = "",
-        content_type: str = "",
-    ) -> TaskDraft:
+        files: list[TaskExtractFile] | None = None,
+    ) -> TaskDrafts:
         """
-        Распознаёт черновик задачи из текста или файла локальной моделью.
+        Распознаёт черновики задач из текста и файлов локальной моделью.
 
-        Метод ничего не сохраняет: черновик возвращается пользователю,
+        Метод ничего не сохраняет: черновики возвращаются пользователю,
         а факт в базе знаний появляется только после POST /v1/tasks.
+
+        Модель сама определяет, что из материала следует одна задача
+        (ответ — один черновик) или несколько независимых задач
+        (ответ — несколько черновиков).
         """
         if self._task_draft_extractor is None:
             raise TaskExtractionError(
@@ -448,9 +451,7 @@ class IntegrationService:
             )
         return self._task_draft_extractor.extract(
             text=text,
-            file_content=file_content,
-            filename=filename,
-            content_type=content_type,
+            files=files,
         )
 
     def sync_group(self, group_number: str) -> IntegrationSyncResult:

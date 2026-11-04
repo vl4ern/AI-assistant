@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable, Protocol
 
 import requests
+from requests.exceptions import Timeout
 
 
 class LlmClientError(RuntimeError):
@@ -89,6 +90,13 @@ class LlamaServerChatClient:
                 headers=headers,
                 timeout=self._timeout_seconds,
             )
+        except Timeout as exc:
+            raise LlmUnavailableError(
+                "Локальная модель не ответила вовремя (таймаут запроса). "
+                "Возможно, файл слишком большой для контекста модели или видеокарта "
+                "загружена. Увеличьте LOCAL_LLM_TIMEOUT_SECONDS или загрузите "
+                "меньший файл."
+            ) from exc
         except requests.RequestException as exc:
             raise LlmUnavailableError(
                 "Локальная модель недоступна. Запустите llama-server и проверьте "

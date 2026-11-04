@@ -23,3 +23,14 @@ class TaskDraft(BaseModel):
     project_id: str | None = None
     input_kind: Literal["text", "image"] = "text"
     warnings: list[str] = Field(default_factory=list)
+
+
+class TaskDrafts(BaseModel):
+    """
+    Набор черновиков задач, распознанных локальной моделью.
+
+    Мультизадачный ввод (несколько задач в одном ответе — например, несколько
+    лабораторных) модель возвращает массивом: один черновик или несколько.
+    """
+
+    tasks: list[TaskDraft] = Field(default_factory=list)

@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.modules.integrations.models.extraction import TaskDraft
+from app.modules.integrations.models.extraction import TaskDraft, TaskDrafts
 
 
 class IntegrationSyncResult(BaseModel):

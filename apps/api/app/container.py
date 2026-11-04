@@ -86,6 +86,7 @@ class Container:
                 vision_enabled=settings.local_llm_vision_enabled,
                 max_text_bytes=settings.local_llm_max_text_kb * 1024,
                 max_image_bytes=settings.local_llm_max_image_mb * 1024 * 1024,
+                max_files=settings.local_llm_max_files,
                 max_tokens=settings.local_llm_max_tokens,
                 temperature=settings.local_llm_temperature,
             )

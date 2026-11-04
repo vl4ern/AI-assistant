@@ -12,7 +12,9 @@ from app.modules.integrations.integration.adapters.llama_server_client import (
 )
 from app.modules.integrations.integration.task_extraction import (
     TaskDraftExtractor,
+    TaskExtractFile,
     TaskExtractionError,
+    is_supported_pdf,
 )
 from app.modules.integrations.service import IntegrationService
 from app.modules.knowledge.in_memory_repository import InMemoryKnowledgeRepository
@@ -58,6 +60,10 @@ def task_json(**overrides) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def task_drafts_json(*tasks: dict) -> str:
+    return json.dumps({"tasks": list(tasks)}, ensure_ascii=False)
+
+
 def user_text(messages: list[dict]) -> str:
     content = messages[1]["content"]
     if isinstance(content, str):
@@ -69,10 +75,11 @@ def test_extracts_task_from_text() -> None:
     client = FakeChatClient("```json\n" + task_json() + "\n```")
     extractor = make_extractor(client)
 
-    draft = extractor.extract(
+    drafts = extractor.extract(
         text="Сдать лабу по ООП до пятницы, примерно 2 часа, очень важно",
         now=FIXED_NOW,
     )
+    draft = drafts.tasks[0]
 
     assert draft.title == "Сдать лабораторную по ООП"
     assert draft.estimated_minutes == 120
@@ -87,19 +94,70 @@ def test_extracts_task_from_text() -> None:
     assert "Сдать лабу по ООП" in user_text(messages)
 
 
+def test_extract_returns_single_task_draft_in_tasks_array() -> None:
+    drafts = make_extractor(FakeChatClient(task_json())).extract(text="Сдать отчёт")
+
+    assert len(drafts.tasks) == 1
+    assert drafts.tasks[0].title == "Сдать лабораторную по ООП"
+
+
+def test_returns_several_task_drafts_when_model_proposes_several() -> None:
+    """Несколько независимых задач — ответ модели с массивом tasks."""
+    client = FakeChatClient(
+        task_drafts_json(
+            {
+                "title": "Сдать лабораторную по ООП",
+                "description": "Первые два задания",
+                "estimated_minutes": 90,
+                "priority": 2,
+                "deadline": "2026-11-05T23:59:00",
+                "workspace_id": "study",
+                "project_id": "oop",
+            },
+            {
+                "title": "Сдать лабораторную по базам данных",
+                "description": "Третье задание",
+                "estimated_minutes": 150,
+                "priority": 1,
+                "deadline": "2026-11-07T23:59:00",
+                "workspace_id": "study",
+                "project_id": "oop",
+            },
+        )
+    )
+    drafts = make_extractor(client).extract(text="Подготовить обе лабораторные по ООП")
+
+    assert len(drafts.tasks) == 2
+    first, second = drafts.tasks
+    assert first.title == "Сдать лабораторную по ООП"
+    assert first.estimated_minutes == 90
+    assert first.priority == 2
+    assert second.title == "Сдать лабораторную по базам данных"
+    assert second.estimated_minutes == 150
+    assert second.priority == 1
+    assert second.deadline == datetime(2026, 11, 7, 23, 59)
+
+
+def test_empty_tasks_array_is_rejected() -> None:
+    extractor = make_extractor(FakeChatClient(json.dumps({"tasks": []})))
+
+    with pytest.raises(TaskExtractionError) as exc_info:
+        extractor.extract(text="Задача")
+
+    assert exc_info.value.status_code == 502
+
+
 def test_extracts_task_from_image_as_data_url() -> None:
     client = FakeChatClient(task_json())
     extractor = make_extractor(client)
     png = b"\x89PNG\r\n\x1a\n" + b"fake-image-bytes"
 
-    draft = extractor.extract(
-        file_content=png,
-        filename="task.png",
-        content_type="image/png",
+    drafts = extractor.extract(
+        files=[TaskExtractFile(filename="task.png", content_type="image/png", content=png)],
         now=FIXED_NOW,
     )
 
-    assert draft.input_kind == "image"
+    assert drafts.tasks[0].input_kind == "image"
     content = client.calls[0]["messages"][1]["content"]
     image_parts = [part for part in content if part["type"] == "image_url"]
     assert len(image_parts) == 1
@@ -108,16 +166,36 @@ def test_extracts_task_from_image_as_data_url() -> None:
     )
 
 
+def test_two_images_are_sent_as_separate_model_parts() -> None:
+    client = FakeChatClient(task_json())
+    extractor = make_extractor(client)
+    png = b"\x89PNG\r\n\x1a\n" + b"fake-image-bytes"
+
+    drafts = extractor.extract(
+        files=[
+            TaskExtractFile(filename="task1.png", content_type="image/png", content=png),
+            TaskExtractFile(filename="task2.png", content_type="image/png", content=png),
+        ],
+        now=FIXED_NOW,
+    )
+
+    assert len(drafts.tasks) == 1
+    content = client.calls[0]["messages"][1]["content"]
+    image_parts = [part for part in content if part["type"] == "image_url"]
+    assert len(image_parts) == 2
+    assert all(
+        part["image_url"]["url"].startswith("data:image/png;base64,")
+        for part in image_parts
+    )
+
+
 def test_text_file_is_decoded_from_cp1251() -> None:
     client = FakeChatClient(task_json())
     extractor = make_extractor(client)
     content = "Лабораторная работа по базам данных".encode("cp1251")
 
-    extractor.extract(
-        file_content=content,
-        filename="task.txt",
-        content_type="text/plain",
-        now=FIXED_NOW,
+    drafts = extractor.extract(
+        files=[TaskExtractFile(filename="task.txt", content_type="text/plain", content=content)],
     )
 
     assert "Лабораторная работа по базам данных" in user_text(
@@ -125,13 +203,44 @@ def test_text_file_is_decoded_from_cp1251() -> None:
     )
 
 
+def test_multiple_text_files_are_combined_into_one_prompt() -> None:
+    client = FakeChatClient(task_json())
+    extractor = make_extractor(client)
+
+    drafts = extractor.extract(
+        files=[
+            TaskExtractFile(filename="lab-oop.txt", content_type="text/plain", content="Лабораторная по ООП".encode("utf-8")),
+            TaskExtractFile(filename="lab-math.txt", content_type="text/plain", content="Лабораторная по матану".encode("utf-8")),
+        ],
+    )
+
+    assert len(drafts.tasks) == 1
+    combined = user_text(client.calls[0]["messages"])
+    assert "Лабораторная по ООП" in combined
+    assert "Лабораторная по матану" in combined
+
+
+def test_too_many_files_are_rejected() -> None:
+    extractor = make_extractor(FakeChatClient(task_json()))
+    files = [
+        TaskExtractFile(filename=f"file{index}.txt", content_type="text/plain", content="текст".encode("utf-8"))
+        for index in range(4)
+    ]
+
+    with pytest.raises(TaskExtractionError) as exc_info:
+        extractor.extract(files=files)
+
+    assert exc_info.value.status_code == 400
+    assert "не более" in str(exc_info.value)
+
+
 def test_deadline_date_only_becomes_end_of_day() -> None:
     client = FakeChatClient(task_json(deadline="2026-11-09"))
     extractor = make_extractor(client)
 
-    draft = extractor.extract(text="Сдать отчёт", now=FIXED_NOW)
+    drafts = extractor.extract(text="Сдать отчёт", now=FIXED_NOW)
 
-    assert draft.deadline == datetime(2026, 11, 9, 23, 59)
+    assert drafts.tasks[0].deadline == datetime(2026, 11, 9, 23, 59)
 
 
 def test_invalid_model_values_are_clamped_with_warnings() -> None:
@@ -144,21 +253,21 @@ def test_invalid_model_values_are_clamped_with_warnings() -> None:
     )
     extractor = make_extractor(client)
 
-    draft = extractor.extract(text="Задача", now=FIXED_NOW)
+    drafts = extractor.extract(text="Задача", now=FIXED_NOW)
 
-    assert draft.estimated_minutes == 15
-    assert draft.priority == 3
-    assert draft.deadline is None
-    assert len(draft.warnings) == 3
+    assert drafts.tasks[0].estimated_minutes == 15
+    assert drafts.tasks[0].priority == 3
+    assert drafts.tasks[0].deadline is None
+    assert len(drafts.tasks[0].warnings) == 3
 
 
 def test_missing_title_falls_back_to_description() -> None:
     client = FakeChatClient(task_json(title="", description="Купить билет на поезд"))
     extractor = make_extractor(client)
 
-    draft = extractor.extract(text="Купить билет на поезд", now=FIXED_NOW)
+    drafts = extractor.extract(text="Купить билет на поезд", now=FIXED_NOW)
 
-    assert draft.title == "Купить билет на поезд"
+    assert drafts.tasks[0].title == "Купить билет на поезд"
 
 
 def test_missing_title_and_description_is_rejected() -> None:
@@ -183,8 +292,7 @@ def test_unavailable_model_maps_to_503() -> None:
 
 
 def test_invalid_json_is_reported_as_bad_gateway() -> None:
-    client = FakeChatClient("это не JSON")
-    extractor = make_extractor(client)
+    extractor = make_extractor(FakeChatClient("это не JSON"))
 
     with pytest.raises(TaskExtractionError) as exc_info:
         extractor.extract(text="Задача", now=FIXED_NOW)
@@ -198,9 +306,13 @@ def test_unsupported_file_type_is_rejected() -> None:
 
     with pytest.raises(TaskExtractionError) as exc_info:
         extractor.extract(
-            file_content=b"MZ\x90\x00binary",
-            filename="program.exe",
-            content_type="application/octet-stream",
+            files=[
+                TaskExtractFile(
+                    filename="program.exe",
+                    content_type="application/octet-stream",
+                    content=b"MZ\x90\x00binary",
+                )
+            ],
             now=FIXED_NOW,
         )
 
@@ -221,14 +333,26 @@ def test_oversized_image_is_rejected() -> None:
 
     with pytest.raises(TaskExtractionError):
         extractor.extract(
-            file_content=png,
-            filename="task.png",
-            content_type="image/png",
+            files=[TaskExtractFile(filename="task.png", content_type="image/png", content=png)],
             now=FIXED_NOW,
         )
 
 
-def test_integration_service_returns_draft_without_saving_fact(tmp_path) -> None:
+def test_pdf_without_extractable_text_is_rejected() -> None:
+    extractor = make_extractor(FakeChatClient(task_json()))
+
+    with pytest.raises(TaskExtractionError) as exc_info:
+        extractor.extract(
+            files=[TaskExtractFile(filename="task.pdf", content_type="application/pdf", content=b"%PDF-1.4 broken")],
+            now=FIXED_NOW,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "PDF" in str(exc_info.value)
+    assert is_supported_pdf("task.pdf")
+
+
+def test_integration_service_returns_drafts_without_saving_fact(tmp_path) -> None:
     kb = KnowledgeService(repository=InMemoryKnowledgeRepository())
     service = IntegrationService(
         knowledge_service=kb,
@@ -236,10 +360,10 @@ def test_integration_service_returns_draft_without_saving_fact(tmp_path) -> None
         task_draft_extractor=TaskDraftExtractor(FakeChatClient(task_json())),
     )
 
-    draft = service.extract_task_draft(text="Сдать лабу по ООП")
+    drafts = service.extract_task_draft(text="Сдать лабу по ООП")
 
-    assert draft.title == "Сдать лабораторную по ООП"
-    # Черновик не становится фактом базы знаний сам по себе.
+    assert drafts.tasks[0].title == "Сдать лабораторную по ООП"
+    # Черновики не становятся фактами базы знаний сам по себе.
     assert kb.list_tasks() == []
 
 

@@ -25,6 +25,7 @@ services:
       LOCAL_LLM_VISION_ENABLED: ${LOCAL_LLM_VISION_ENABLED:-true}
       LOCAL_LLM_MAX_TEXT_KB: ${LOCAL_LLM_MAX_TEXT_KB:-256}
       LOCAL_LLM_MAX_IMAGE_MB: ${LOCAL_LLM_MAX_IMAGE_MB:-10}
+      LOCAL_LLM_MAX_FILES: ${LOCAL_LLM_MAX_FILES:-3}
     # Нужно, только если API в Docker должен ходить к llama-server на хосте
     # (LOCAL_LLM_BASE_URL=http://host.docker.internal:8080).
     extra_hosts:
@@ -71,7 +72,7 @@ services:
       - --alias
       - ${LOCAL_LLM_MODEL:-qwen3.5-4b}
       - --ctx-size
-      - ${LOCAL_LLM_CTX_SIZE:-8192}
+      - ${LOCAL_LLM_CTX_SIZE:-16384}
       - --image-min-tokens
       - ${LOCAL_LLM_IMAGE_MIN_TOKENS:-1024}
       - --jinja

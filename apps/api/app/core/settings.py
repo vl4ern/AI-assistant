@@ -82,6 +82,9 @@ class AppSettings(BaseModel):
     local_llm_max_image_mb: int = Field(
         default=int(os.getenv("LOCAL_LLM_MAX_IMAGE_MB", "10")), ge=1, le=50
     )
+    local_llm_max_files: int = Field(
+        default=int(os.getenv("LOCAL_LLM_MAX_FILES", "3")), ge=1, le=10
+    )
 
 
 settings = AppSettings()
