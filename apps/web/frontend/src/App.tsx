@@ -17,6 +17,7 @@ import type { CurrentGroupInfo, Lesson, WeekInfo } from './api/integrations';
 import { rebuildSchedule } from './api/schedule';
 import type { SchedulePlan } from './api/schedule';
 import { createTask as createTaskApi, getTasks, updateTaskStatus } from './api/tasks';
+import { GoogleCalendarPanel } from './components/GoogleCalendarPanel';
 import { TaskExtractPanel } from './components/TaskExtractPanel';
 import type { ApiTask, ApiTaskCreate, ApiTaskDraft, ApiTaskStatus } from './types/api';
 import { SettingsProvider } from './settings-provider';
@@ -395,7 +396,12 @@ function AppInner() {
         )}
 
         {activePage === 'calendar' && (
-          <CalendarPage lessons={lessons} tasks={tasks} weekInfo={weekInfo} />
+          <CalendarPage
+            lessons={lessons}
+            tasks={tasks}
+            weekInfo={weekInfo}
+            onGoogleChanged={() => void refreshData()}
+          />
         )}
 
         {activePage === 'plan' && (
@@ -1214,10 +1220,12 @@ function CalendarPage({
   lessons,
   tasks,
   weekInfo,
+  onGoogleChanged,
 }: {
   lessons: Lesson[];
   tasks: ApiTask[];
   weekInfo: WeekInfo | null;
+  onGoogleChanged: () => void;
 }) {
   const { t, locale } = useSettings();
   const now = new Date();
@@ -1306,6 +1314,8 @@ function CalendarPage({
           </button>
         </div>
       </div>
+
+      <GoogleCalendarPanel onChanged={onGoogleChanged} />
 
       <div className="month-grid">
         {WEEK_DAYS_SHORT.map((weekday) => (

@@ -276,6 +276,51 @@ paths:
                 items:
                   $ref: "#/components/schemas/IntegrationAdapterStatus"
 
+  /v1/integrations/google/status:
+    get:
+      tags: [integrations]
+      summary: Google Calendar integration status
+      operationId: getGoogleStatus
+      responses:
+        "200":
+          description: Configured / connected state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoogleCalendarStatus"
+
+  /v1/integrations/google/connect:
+    post:
+      tags: [integrations]
+      summary: Authorize Google Calendar (OAuth, browser opens on the backend machine)
+      operationId: connectGoogle
+      responses:
+        "200":
+          description: Updated status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoogleCalendarStatus"
+        "400":
+          description: Not configured or authorization failed
+
+  /v1/integrations/google/export:
+    post:
+      tags: [integrations]
+      summary: Rebuild the plan and export scheduled slots to Google Calendar
+      operationId: exportPlanToGoogle
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Export result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoogleExportResult"
+        "400":
+          description: Google Calendar is not connected
+
   /v1/integrations/sync:
     post:
       tags: [integrations]
@@ -677,6 +722,40 @@ components:
           type: string
       required:
         - provider
+
+    GoogleCalendarStatus:
+      type: object
+      properties:
+        configured:
+          type: boolean
+        connected:
+          type: boolean
+        last_sync_at:
+          type: string
+          format: date-time
+          nullable: true
+        message:
+          type: string
+      required:
+        - configured
+        - connected
+
+    GoogleExportResult:
+      type: object
+      properties:
+        exported:
+          type: integer
+        failed:
+          type: integer
+        errors:
+          type: array
+          items:
+            type: string
+        message:
+          type: string
+      required:
+        - exported
+        - failed
 
     IntegrationAdapterStatus:
       type: object

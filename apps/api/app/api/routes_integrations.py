@@ -1,8 +1,12 @@
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
+from app.api.deps import get_current_user
 from app.container import container
+from app.modules.auth.models import UserPublic
 from app.modules.integrations.models import (
     CurrentGroupInfo,
+    GoogleCalendarStatus,
+    GoogleExportResult,
     IntegrationAdapterStatus,
     IntegrationSyncResult,
     Lesson,
@@ -63,6 +67,34 @@ def sync_group(data: dict) -> IntegrationSyncResult:
     group_number = str(data.get("group_number", "") or "")
     try:
         return container.integration_service.sync_group(group_number)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/google/status", response_model=GoogleCalendarStatus)
+def google_status() -> GoogleCalendarStatus:
+    """Состояние интеграции с Google Calendar (настроена / подключена)."""
+    return container.integration_service.google_status()
+
+
+@router.post("/google/connect", response_model=GoogleCalendarStatus)
+def google_connect() -> GoogleCalendarStatus:
+    """
+    Авторизация в Google (OAuth). Браузер откроется на машине с backend.
+    Запрос блокируется до завершения авторизации.
+    """
+    try:
+        return container.integration_service.connect_google()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/google/export", response_model=GoogleExportResult)
+def google_export(user: UserPublic = Depends(get_current_user)) -> GoogleExportResult:
+    """Перестраивает план пользователя и переносит слоты в Google Calendar."""
+    plan = container.scheduler_service.rebuild(user.id)
+    try:
+        return container.integration_service.export_slots_to_google(plan.slots)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

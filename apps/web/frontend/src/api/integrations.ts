@@ -86,3 +86,40 @@ export function syncGroup(groupNumber: string): Promise<IntegrationSyncResult> {
     body: JSON.stringify({ group_number: groupNumber }),
   });
 }
+
+export type GoogleCalendarStatus = {
+  configured: boolean;
+  connected: boolean;
+  last_sync_at: string | null;
+  message: string;
+};
+
+export type GoogleExportResult = {
+  exported: number;
+  failed: number;
+  errors: string[];
+  message: string;
+};
+
+export function getGoogleStatus(): Promise<GoogleCalendarStatus> {
+  return apiRequest<GoogleCalendarStatus>('/v1/integrations/google/status');
+}
+
+// Браузер с окном авторизации Google откроется на машине, где запущен backend.
+export function connectGoogle(): Promise<GoogleCalendarStatus> {
+  return apiRequest<GoogleCalendarStatus>('/v1/integrations/google/connect', {
+    method: 'POST',
+  });
+}
+
+// Импорт: подтянуть события из Google Calendar в приложение.
+export function importFromGoogle(): Promise<IntegrationSyncResult> {
+  return syncIntegration('GoogleCalendar');
+}
+
+// Экспорт: перестроить план и перенести слоты в Google Calendar.
+export function exportPlanToGoogle(): Promise<GoogleExportResult> {
+  return apiRequest<GoogleExportResult>('/v1/integrations/google/export', {
+    method: 'POST',
+  });
+}

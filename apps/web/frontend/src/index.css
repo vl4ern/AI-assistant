@@ -1629,3 +1629,18 @@ html[data-theme='light'] .day-card {
 html[data-theme='light'] .group-subtitle::before {
   box-shadow: 0 0 8px rgba(37, 99, 235, 0.35);
 }
+
+/* Google Calendar panel */
+.google-panel {
+  margin-bottom: 16px;
+}
+
+.google-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.google-panel-error {
+  color: #e5484d;
+}

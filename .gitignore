@@ -49,3 +49,4 @@ google_token.pickle
 GenerateFile.py
 all_code.txt
 .coverage
+*.pickle

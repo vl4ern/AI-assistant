@@ -69,3 +69,25 @@ class WeekInfo(BaseModel):
     current_week: int = Field(ge=1, le=4)
     semester_start: datetime
     today: datetime
+
+
+class GoogleCalendarStatus(BaseModel):
+    """Состояние интеграции с Google Calendar."""
+
+    configured: bool = Field(
+        default=False, description="Найден файл credentials.json (OAuth-ключ)"
+    )
+    connected: bool = Field(
+        default=False, description="Авторизация выполнена, синхронизация доступна"
+    )
+    last_sync_at: datetime | None = None
+    message: str = ""
+
+
+class GoogleExportResult(BaseModel):
+    """Итог экспорта запланированных слотов в Google Calendar."""
+
+    exported: int = Field(ge=0, default=0, description="Создано или обновлено событий")
+    failed: int = Field(ge=0, default=0)
+    errors: list[str] = Field(default_factory=list)
+    message: str = ""

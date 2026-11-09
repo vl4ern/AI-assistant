@@ -18,11 +18,17 @@ from app.modules.integrations.integration.task_extraction import (
 from app.modules.integrations.integration.retry_queue import RetryQueue
 from app.modules.integrations.integration.sync_scheduler import SyncScheduler
 from app.modules.integrations.models import (
+    GoogleCalendarStatus,
+    GoogleExportResult,
     IntegrationAdapterStatus,
     IntegrationSyncResult,
     Lesson,
     TaskDrafts,
     WeekInfo,
+)
+from app.modules.integrations.models.google_models import (
+    get_local_tz,
+    to_local_naive,
 )
 from app.modules.integrations.models.iis_models import academic_week
 from app.modules.integrations.models.sync import SyncResult
@@ -91,6 +97,8 @@ class IntegrationService:
     ) -> None:
         self._semester_start = self._parse_semester_start(semester_start_date)
         self._horizon_days = iis_horizon_days
+        self._google_credentials_file = google_credentials_file
+        self._google_adapter = None
         self._task_draft_extractor = task_draft_extractor
 
         cache = SQLiteCacheStorage(cache_path)
@@ -149,23 +157,117 @@ class IntegrationService:
                     GoogleCalendarAdapter,
                 )
 
-                adapter = GoogleCalendarAdapter(
+                self._google_adapter = GoogleCalendarAdapter(
                     credentials_file=google_credentials_file,
-                    token_file=google_token_file,
+                    token_file=google_token_file or "google_token.pickle",
+                    timezone_name=str(get_local_tz()),
                 )
-                if adapter.authenticate():
-                    self._scheduler.register_adapter(
-                        "GoogleCalendar",
-                        adapter,
-                        sync_interval=GOOGLE_CALENDAR_SYNC_INTERVAL_SECONDS,
-                    )
+                # При старте — только сохранённый токен, без браузера и без
+                # блокировки сервера. Первую авторизацию делает кнопка
+                # «Подключить Google» (POST /v1/integrations/google/connect).
+                if self._google_adapter.authenticate(interactive=False):
+                    self._register_google_adapter()
                 else:
-                    print("[Integrations] Ошибка аутентификации Google Calendar")
+                    print("[Integrations] Google Calendar: нужна авторизация (кнопка в интерфейсе)")
             except Exception as e:
                 print(f"[Integrations] Google Calendar не настроен: {e}")
 
         if not self._scheduler.adapters:
             print("[Integrations] Адаптеры не настроены (укажите IIS_GROUP_NUMBER или credentials.json)")
+
+    # ---------- Google Calendar ----------
+
+    def _register_google_adapter(self) -> None:
+        if self._google_adapter is None or "GoogleCalendar" in self._scheduler.adapters:
+            return
+        self._scheduler.register_adapter(
+            "GoogleCalendar",
+            self._google_adapter,
+            sync_interval=GOOGLE_CALENDAR_SYNC_INTERVAL_SECONDS,
+        )
+
+    def google_status(self) -> GoogleCalendarStatus:
+        configured = self._google_adapter is not None
+        connected = bool(configured and self._google_adapter.is_authenticated)
+        last_sync = self._scheduler.last_sync_time.get("GoogleCalendar")
+        if not configured:
+            message = (
+                "Не найден файл credentials.json — укажите GOOGLE_CREDENTIALS_FILE "
+                "(OAuth-ключ типа «Desktop app» из Google Cloud Console)."
+            )
+        elif not connected:
+            message = "Google Calendar не подключён — нажмите «Подключить»."
+        else:
+            message = "Google Calendar подключён."
+        return GoogleCalendarStatus(
+            configured=configured,
+            connected=connected,
+            last_sync_at=(last_sync if last_sync and last_sync != datetime.min else None),
+            message=message,
+        )
+
+    def connect_google(self) -> GoogleCalendarStatus:
+        """
+        Интерактивная авторизация. Браузер откроется на той машине, где
+        запущен backend, поэтому внутри Docker-контейнера этот способ не
+        работает — токен нужно получить локально (см. README).
+        """
+        if self._google_adapter is None:
+            raise ValueError(self.google_status().message)
+        try:
+            self._google_adapter.authenticate(interactive=True)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"Не удалось авторизоваться в Google: {exc}") from exc
+        self._register_google_adapter()
+        return self.google_status()
+
+    def export_slots_to_google(self, slots: list) -> GoogleExportResult:
+        """
+        Переносит запланированные слоты в Google Calendar.
+
+        Сопоставление «задача → событие» хранится в настройках кэша, поэтому
+        повторный экспорт обновляет уже созданные события, а не плодит копии.
+        """
+        adapter = self._google_adapter
+        if adapter is None or not adapter.is_authenticated:
+            raise ValueError("Google Calendar не подключён")
+
+        cache = self._scheduler.cache
+        exported = 0
+        errors: list[str] = []
+
+        for slot in slots:
+            start = to_local_naive(slot.start_at)
+            end = to_local_naive(slot.end_at)
+            key = f"google_export:{slot.task_id}"
+            known_event_id = cache.get_setting(key, "")
+
+            task = Task(
+                id=f"plan_{slot.task_id}",
+                external_id=known_event_id,
+                source_type=SourceType.MANUAL,
+                title=slot.title,
+                description="Запланировано в AI-assistant",
+                due_date=start,
+                duration_minutes=max(int((end - start).total_seconds() // 60), 15),
+            )
+            if adapter.push_update(task):
+                if task.external_id:
+                    cache.set_setting(key, task.external_id)
+                exported += 1
+            else:
+                errors.append(f"Не удалось экспортировать «{slot.title}»")
+
+        return GoogleExportResult(
+            exported=exported,
+            failed=len(errors),
+            errors=errors,
+            message=(
+                f"Экспортировано событий: {exported}"
+                if not errors
+                else f"Экспортировано: {exported}, с ошибками: {len(errors)}"
+            ),
+        )
 
     def list_adapters(self) -> list[IntegrationAdapterStatus]:
         statuses: list[IntegrationAdapterStatus] = []

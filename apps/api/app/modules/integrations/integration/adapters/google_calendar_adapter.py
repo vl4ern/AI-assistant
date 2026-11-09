@@ -1,172 +1,209 @@
 import os
 import pickle
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
+
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 from app.modules.integrations.integration.interfaces import IServiceAdapter
-from app.modules.integrations.models.google_models import GoogleCalendarEvent
+from app.modules.integrations.models.google_models import (
+    EXPORT_MARKER_KEY,
+    GoogleCalendarEvent,
+)
 from app.modules.integrations.models.task import Task
 
-# Если модифицируем права, удаляем сохраненный токен
-SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+# readonly не подходит: адаптер ещё и пишет события (экспорт плана).
+# calendar.events — минимальный scope для чтения и записи событий.
+SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 
 
 class GoogleCalendarAdapter(IServiceAdapter):
-    """Адаптер для синхронизации с Google Calendar"""
+    """Адаптер двусторонней синхронизации с Google Calendar."""
 
     def __init__(
         self,
         credentials_file: str = "credentials.json",
-        token_file: str = "token.pickle",
+        token_file: str = "google_token.pickle",
+        calendar_id: str = "primary",
+        timezone_name: str = "Europe/Minsk",
     ):
         self.credentials_file = credentials_file
         self.token_file = token_file
+        self.calendar_id = calendar_id
+        self.timezone_name = timezone_name
         self.service = None
-        self.sync_token = None  # Для инкрементальной синхронизации
+        self.sync_token: Optional[str] = None
 
-    def authenticate(self, token: str = None) -> bool:
+    @property
+    def is_authenticated(self) -> bool:
+        return self.service is not None
+
+    # ---------- аутентификация ----------
+
+    def _load_saved_credentials(self):
+        if not os.path.exists(self.token_file):
+            return None
+        try:
+            with open(self.token_file, "rb") as f:
+                creds = pickle.load(f)
+        except Exception:  # noqa: BLE001 — битый/чужой файл токена
+            return None
+        # Токен, выданный на старый scope (readonly), для записи не годится.
+        if creds is not None and hasattr(creds, "has_scopes") and not creds.has_scopes(SCOPES):
+            return None
+        return creds
+
+    def authenticate(self, token: Optional[str] = None, interactive: bool = True) -> bool:
         """
-        Выполняет OAuth 2.0 аутентификацию.
-        При первом запуске откроет браузер для авторизации.
+        OAuth 2.0.
+
+        interactive=False — только сохранённый токен (с автообновлением),
+        без открытия браузера: так безопасно вызывать при старте сервера.
+        interactive=True — при отсутствии токена откроет браузер
+        на машине, где запущен backend.
         """
-        creds = None
+        creds = self._load_saved_credentials()
 
-        # Загружаем сохраненный токен
-        if os.path.exists(self.token_file):
-            with open(self.token_file, "rb") as token_file:
-                creds = pickle.load(token_file)
-
-        # Если токена нет или он недействителен
-        if not creds or not creds.valid:
-            # Пробуем обновить токен
-            if creds and creds.expired and creds.refresh_token:
+        if creds and not creds.valid and creds.expired and creds.refresh_token:
+            try:
                 creds.refresh(Request())
-            else:
-                # Первый запуск — открываем браузер для авторизации
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    self.credentials_file, SCOPES
+            except Exception:  # noqa: BLE001 — токен отозван/просрочен
+                creds = None
+
+        if not creds or not creds.valid:
+            if not interactive:
+                return False
+            if not os.path.exists(self.credentials_file):
+                raise FileNotFoundError(
+                    f"Файл {self.credentials_file} не найден. "
+                    "Скачайте OAuth-ключ (Desktop app) из Google Cloud Console."
                 )
-                creds = flow.run_local_server(port=8080)
+            flow = InstalledAppFlow.from_client_secrets_file(self.credentials_file, SCOPES)
+            creds = flow.run_local_server(port=0)
 
-            # Сохраняем токен для будущих запусков
-            with open(self.token_file, "wb") as token:
-                pickle.dump(creds, token)
+        with open(self.token_file, "wb") as f:
+            pickle.dump(creds, f)
 
-        # Создаем сервис Google Calendar
-        self.service = build("calendar", "v3", credentials=creds)
+        self.service = build("calendar", "v3", credentials=creds, cache_discovery=False)
         return True
 
+    # ---------- чтение ----------
+
     def fetch_changes(self, since: Optional[datetime] = None) -> List[Task]:
-        """
-        Получает изменения из Google Calendar.
-        Использует инкрементальную синхронизацию через syncToken для эффективности.
-        """
         if not self.service:
-            raise Exception("Not authenticated. Call authenticate() first.")
+            raise RuntimeError("Not authenticated. Call authenticate() first.")
 
-        tasks = []
+        tasks: List[Task] = []
+        page_token: Optional[str] = None
 
-        try:
-            if self.sync_token:
-                # Инкрементальная синхронизация
-                events_result = (
-                    self.service.events()
-                    .list(
-                        calendarId="primary",
+        while True:
+            try:
+                if self.sync_token:
+                    request = self.service.events().list(
+                        calendarId=self.calendar_id,
                         syncToken=self.sync_token,
                         showDeleted=True,
+                        pageToken=page_token,
+                        maxResults=2500,
                     )
-                    .execute()
-                )
-            else:
-                # Первая полная синхронизация
-                time_min = since or datetime(
-                    2020, 1, 1
-                )  # Если since не задан, берем далекое прошлое
-                events_result = (
-                    self.service.events()
-                    .list(
-                        calendarId="primary",
-                        timeMin=time_min.isoformat() + "Z" if since else None,
+                else:
+                    # Без since берём последние 90 дней, а не весь календарь.
+                    effective_since = since or (datetime.now() - timedelta(days=90))
+                    if effective_since.tzinfo is None:
+                        effective_since = effective_since.astimezone()  # локальный → aware
+                    time_min = effective_since.astimezone(timezone.utc).strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
+                    )
+                    request = self.service.events().list(
+                        calendarId=self.calendar_id,
+                        timeMin=time_min,
                         showDeleted=True,
                         singleEvents=True,
-                        maxResults=2500,  # Максимальное количество событий
+                        orderBy="startTime",
+                        maxResults=2500,
+                        pageToken=page_token,
                     )
-                    .execute()
-                )
 
-            # Сохраняем токен для следующей инкрементальной синхронизации
-            self.sync_token = events_result.get("nextSyncToken")
+                events_result = request.execute()
+            except Exception as e:  # noqa: BLE001
+                # syncToken устарел (410) — сбрасываем и начинаем с нуля.
+                if self.sync_token and ("410" in str(e) or "sync token" in str(e).lower()):
+                    self.sync_token = None
+                    page_token = None
+                    tasks = []
+                    continue
+                raise
 
-            # Конвертируем события в Task
             for event in events_result.get("items", []):
                 task = GoogleCalendarEvent.from_google_event(event)
-                if task:
+                if task is not None:
                     tasks.append(task)
 
-        except Exception as e:
-            # Если syncToken устарел (ошибка 410), сбрасываем и пробуем заново
-            if "410" in str(e) or "syncToken" in str(e).lower():
-                self.sync_token = None
-                return self.fetch_changes(since)
-            raise
+            page_token = events_result.get("nextPageToken")
+            if page_token:
+                continue
+
+            self.sync_token = events_result.get("nextSyncToken")
+            break
 
         return tasks
 
+    # ---------- запись ----------
+
     def push_update(self, task: Task) -> bool:
         """
-        Создает или обновляет событие в Google Calendar.
+        Создаёт или обновляет событие в Google Calendar.
+        due_date — naive, в локальном поясе (timezone_name).
+        Событие помечается extendedProperties.private.ai_assistant,
+        чтобы при обратной синхронизации его можно было отличить.
         """
         if not self.service:
-            raise Exception("Not authenticated. Call authenticate() first.")
+            raise RuntimeError("Not authenticated. Call authenticate() first.")
+        if not task.due_date:
+            return False
 
+        start = task.due_date
+        end = start + timedelta(minutes=max(task.duration_minutes, 15))
         event_body = {
             "summary": task.title,
-            "description": task.description,
+            "description": task.description or "",
+            "start": {"dateTime": start.isoformat(), "timeZone": self.timezone_name},
+            "end": {"dateTime": end.isoformat(), "timeZone": self.timezone_name},
+            "extendedProperties": {"private": {EXPORT_MARKER_KEY: "1"}},
         }
 
-        # Настройка времени
-        if task.due_date:
-            end_time = task.due_date + task.duration_minutes * 60  # approximated
-            event_body["start"] = {
-                "dateTime": task.due_date.isoformat(),
-                "timeZone": "Europe/Minsk",
-            }
-            event_body["end"] = {
-                "dateTime": end_time.isoformat(),
-                "timeZone": "Europe/Minsk",
-            }
-
-        # Проверяем, существует ли событие
         try:
             if task.external_id:
-                # Обновляем существующее
-                self.service.events().update(
-                    calendarId="primary", eventId=task.external_id, body=event_body
-                ).execute()
+                updated = (
+                    self.service.events()
+                    .update(calendarId=self.calendar_id, eventId=task.external_id, body=event_body)
+                    .execute()
+                )
+                if updated.get("id"):
+                    task.external_id = updated["id"]
             else:
-                # Создаем новое
-                self.service.events().insert(
-                    calendarId="primary", body=event_body
-                ).execute()
+                created = (
+                    self.service.events()
+                    .insert(calendarId=self.calendar_id, body=event_body)
+                    .execute()
+                )
+                if created.get("id"):
+                    task.external_id = created["id"]
             return True
-        except Exception as e:
-            print(f"Error pushing to Google Calendar: {e}")
+        except Exception as e:  # noqa: BLE001
+            print(f"[GoogleCalendar] Ошибка push_update: {e}")
             return False
 
     def delete_task(self, external_id: str) -> bool:
-        """Удаляет событие из Google Calendar"""
         if not self.service:
-            raise Exception("Not authenticated. Call authenticate() first.")
-
+            raise RuntimeError("Not authenticated. Call authenticate() first.")
         try:
             self.service.events().delete(
-                calendarId="primary", eventId=external_id
+                calendarId=self.calendar_id, eventId=external_id
             ).execute()
             return True
-        except Exception as e:
-            print(f"Error deleting from Google Calendar: {e}")
+        except Exception as e:  # noqa: BLE001
+            print(f"[GoogleCalendar] Ошибка delete_task: {e}")
             return False
