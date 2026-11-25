@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Локальный запуск мультимодальной модели (без Docker).
+# Локальный запуск мультимодальной Gemma 4 E2B (без Docker).
+# Используются три файла из models/gemma: основная модель, mmproj и MTP-драфтер.
 # Для Docker-запуска используйте `make compose-up`: там llama-server
 # поднимается отдельным контейнером.
 set -euo pipefail
@@ -9,15 +10,19 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-llama-server}"
-MODEL_FILE="${LOCAL_LLM_MODEL_FILE:-Qwen3.5-4B-UD-Q4_K_XL.gguf}"
+MODELS_DIR="${LOCAL_LLM_MODELS_DIR:-models/gemma}"
+MODEL_FILE="${LOCAL_LLM_MODEL_FILE:-gemma-4-E2B-it-UD-Q4_K_XL.gguf}"
 MMPROJ_FILE="${LOCAL_LLM_MMPROJ_FILE:-mmproj-F16.gguf}"
-MODEL_PATH="${LOCAL_LLM_MODEL_PATH:-models/$MODEL_FILE}"
-MMPROJ_PATH="${LOCAL_LLM_MMPROJ_PATH:-models/$MMPROJ_FILE}"
+MTP_FILE="${LOCAL_LLM_MTP_FILE:-mtp-gemma-4-E2B-it.gguf}"
+MODEL_PATH="${LOCAL_LLM_MODEL_PATH:-$MODELS_DIR/$MODEL_FILE}"
+MMPROJ_PATH="${LOCAL_LLM_MMPROJ_PATH:-$MODELS_DIR/$MMPROJ_FILE}"
+MTP_PATH="${LOCAL_LLM_MTP_PATH:-$MODELS_DIR/$MTP_FILE}"
 HOST="${LOCAL_LLM_HOST:-0.0.0.0}"
 PORT="${LOCAL_LLM_PORT:-8080}"
 CTX_SIZE="${LOCAL_LLM_CTX_SIZE:-16384}"
-ALIAS="${LOCAL_LLM_MODEL:-qwen3.5-4b}"
+ALIAS="${LOCAL_LLM_MODEL:-gemma-4-e2b}"
 IMAGE_MIN_TOKENS="${LOCAL_LLM_IMAGE_MIN_TOKENS:-1024}"
+MTP_N_MAX="${LOCAL_LLM_MTP_N_MAX:-4}"
 
 # Автоподбор количества GPU-слоёв, если не задан явно.
 if [[ -z "${LOCAL_LLM_GPU_LAYERS:-}" ]]; then
@@ -76,10 +81,18 @@ ARGS=(
   --jinja
 )
 
-if [[ -f "$MMPROJ_PATH" ]]; then
+if [[ -n "$MMPROJ_FILE" && -f "$MMPROJ_PATH" ]]; then
   ARGS+=(--mmproj "$MMPROJ_PATH")
-else
+elif [[ -n "$MMPROJ_FILE" ]]; then
   echo "Внимание: mmproj не найден ($MMPROJ_PATH) — изображения не будут распознаваться." >&2
+  echo "Скачайте модели: make models" >&2
+fi
+
+if [[ -n "$MTP_FILE" && -f "$MTP_PATH" ]]; then
+  # MTP-драфтер Gemma ускоряет генерацию спекулятивным декодированием.
+  ARGS+=(--spec-type draft-mtp --spec-draft-model "$MTP_PATH" --spec-draft-n-max "$MTP_N_MAX")
+elif [[ -n "$MTP_FILE" ]]; then
+  echo "Внимание: MTP-модель не найдена ($MTP_PATH) — спекулятивное декодирование отключено." >&2
   echo "Скачайте модели: make models" >&2
 fi
 

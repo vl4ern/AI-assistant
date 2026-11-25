@@ -37,6 +37,7 @@
   - [Почему так, а не иначе](#почему-так-а-не-иначе)
   - [Если что-то не работает](#если-что-то-не-работает)
   - [Дневник работы](#дневник-работы)
+    - [25.11.2026 — переход на Gemma 4 E2B](#25112026--переход-на-gemma-4-e2b)
     - [04.11.2026 — задачи из нескольких файлов и несколько задач через локальную LLM](#04112026--задачи-из-нескольких-файлов-и-несколько-задач-через-локальную-llm)
     - [03.11.2026 — Docker-запуск llama-server и автозагрузка моделей](#03112026--docker-запуск-llama-server-и-автозагрузка-моделей)
     - [03.11.2026 — задачи из фото и текста (локальная Qwen3.5 4B)](#03112026--задачи-из-фото-и-текста-локальная-qwen35-4b)
@@ -61,12 +62,12 @@
 ```bash
 cp .env.example .env
 # впишите номер группы: IIS_GROUP_NUMBER=421701
-make up
+make up # make up-gpu для запуска на gpu
 ```
 
 `make up` — одна команда для любого ПК: скачивает модели (если их ещё нет),
 собирает backend и frontend, поднимает `api + web + postgres + llm` в
-Docker. Первый запуск дольше обычного: нужно скачать ~3.4 ГБ моделей и
+Docker. Первый запуск дольше обычного: нужно скачать ~4.3 ГБ моделей и
 образ `llama.cpp`.
 
 | Что                                 | Где                       |
@@ -126,7 +127,7 @@ make api-install   # venv + зависимости backend
 make api-dev      # API на http://localhost:8000
 make web-install  # зависимости frontend
 make web-dev      # интерфейс на http://localhost:5173
-make api-test     # тесты backend (99 шт.)
+make api-test     # тесты backend (107 шт.)
 ```
 
 `.env` читают и Makefile, и backend (`app/core/settings.py` подключает
@@ -135,7 +136,7 @@ python-dotenv), переменные одни и те же.
 ### Распознавание задач из фото, текста и PDF
 
 Кнопка «Добавить по фото или тексту» на странице «Задачи» работает через
-локальную мультимодальную модель Qwen3.5 4B и `llama-server` из llama.cpp.
+локальную мультимодальную модель Gemma 4 E2B и `llama-server` из llama.cpp.
 
 - **Вход**: текст, один файл (TXT/MD/CSV/JSON/PDF или JPG/PNG/WebP/GIF/BMP)
   или несколько файлов (лимит — `LOCAL_LLM_MAX_FILES`, по умолчанию 3) —
@@ -150,12 +151,14 @@ python-dotenv), переменные одни и те же.
   задачи. Ответ может содержать до 3 задач (резерв токенов
   `LOCAL_LLM_MAX_TOKENS + 512`).
 
-**Модели не хранятся в git.** Они весят ~3.4 ГБ, а GitHub не принимает
+**Модели не хранятся в git.** Они весят ~4.3 ГБ, а GitHub не принимает
 файлы больше 100 МБ; Git LFS на такой объём не влезает в бесплатную
-квоту. Вместо этого `make models` скачивает те же файлы из публичного
-репозитория `unsloth/Qwen3.5-4B-GGUF` на закреплённой ревизии и сверяет
+квоту. Вместо этого `make models` скачивает те же три файла из публичного
+репозитория `unsloth/gemma-4-E2B-it-GGUF` на закреплённой ревизии и сверяет
 SHA256 с `scripts/models.lock`. На всех компьютерах получаются одинаковые
-модели. `make up` и `make llm-dev` вызывают `make models` автоматически.
+модели: основная Gemma, мультимодальный проектор и MTP-драфтер для
+спекулятивного декодирования. `make up` и `make llm-dev` вызывают
+`make models` автоматически.
 
 Три режима запуска:
 
@@ -241,7 +244,7 @@ AI-assistant/
 │   ├── download-models.sh            скачивание GGUF из Hugging Face
 │   ├── models.lock                   ревизия + SHA256 моделей
 │   └── run-llama-server.sh           локальный запуск без Docker
-├── models/                           GGUF-модели (скачиваются, не в git)
+├── models/gemma/                     GGUF-модели Gemma (скачиваются, не в git)
 ├── Makefile                          короткие команды
 └── .github/workflows/ci.yml          тесты + линт на каждый пуш
 ```
@@ -650,7 +653,7 @@ def test_my_service():
 ## Тесты и CI
 
 ```bash
-make api-test                        # 99 тестов
+make api-test                        # 107 тестов
 cd apps/web/frontend && npm run lint # линт фронта
 ```
 
@@ -691,22 +694,24 @@ CI (`.github/workflows/ci.yml`) на каждый пуш и PR: pytest backend'�
 | `GOOGLE_CREDENTIALS_FILE` / `GOOGLE_TOKEN_FILE` | путь к OAuth-кредам Google Calendar                                                 | пусто                                                                   |
 | `LOCAL_LLM_ENABLED`                              | включить распознавание задач локальной моделью                     | `true`                                                                     |
 | `LOCAL_LLM_BASE_URL`                             | адрес `llama-server`                                                                    | локально `http://localhost:8080`, в compose `http://llm:8080` |
-| `LOCAL_LLM_MODEL`                                | имя модели в запросах (`--alias` у llama-server)                     | `qwen3.5-4b`                                                               |
+| `LOCAL_LLM_MODEL`                                | имя модели в запросах (`--alias` у llama-server)                     | `gemma-4-e2b`                                                              |
 | `LOCAL_LLM_TIMEOUT_SECONDS`                      | таймаут запроса к модели                                                     | `180`                                                                      |
 | `LOCAL_LLM_MAX_TOKENS`                           | максимум токенов ответа                                                          | `1024`                                                                     |
 | `LOCAL_LLM_TEMPERATURE`                          | температура генерации                                                              | `0.1`                                                                      |
-| `LOCAL_LLM_DISABLE_THINKING`                     | отключить reasoning Qwen (сразу JSON)                                     | `true`                                                                     |
+| `LOCAL_LLM_DISABLE_THINKING`                     | отключить reasoning Gemma 4 (сразу JSON)                                  | `true`                                                                     |
 | `LOCAL_LLM_VISION_ENABLED`                       | разрешить распознавание изображений                                  | `true`                                                                     |
 | `LOCAL_LLM_MAX_TEXT_KB` / `LOCAL_LLM_MAX_IMAGE_MB` | лимиты текста и изображения                                         | `256` КБ / `10` МБ                                                   |
 | `LOCAL_LLM_MAX_FILES`                           | максимум файлов в одном распознавании (текст/фото/PDF)              | `3`                                                                     |
-| `LOCAL_LLM_MODEL_FILE` / `LOCAL_LLM_MMPROJ_FILE` | имена GGUF-файлов в `models/`                                               | `Qwen3.5-4B-UD-Q4_K_XL.gguf` / `mmproj-F16.gguf` |
-| `LOCAL_LLM_HF_REPO` / `LOCAL_LLM_HF_REVISION`    | откуда `make models` качает файлы                                     | `unsloth/Qwen3.5-4B-GGUF` + закреплённый commit |
-| `LOCAL_LLM_MODEL_PATH` / `LOCAL_LLM_MMPROJ_PATH` | явные пути к GGUF для `scripts/run-llama-server.sh`        | `models/<имя из файлов выше>`                                  |
+| `LOCAL_LLM_MODELS_DIR`                           | папка с GGUF-файлами (относительно корня проекта)                            | `models/gemma`                                                             |
+| `LOCAL_LLM_MODEL_FILE` / `LOCAL_LLM_MMPROJ_FILE` / `LOCAL_LLM_MTP_FILE` | имена GGUF-файлов (модель / проектор / MTP-драфтер) | `gemma-4-E2B-it-UD-Q4_K_XL.gguf` / `mmproj-F16.gguf` / `mtp-gemma-4-E2B-it.gguf` |
+| `LOCAL_LLM_MTP_N_MAX`                            | сколько токенов MTP-драфтер предлагает за шаг                | `4`                                                                        |
+| `LOCAL_LLM_HF_REPO` / `LOCAL_LLM_HF_REVISION`    | откуда `make models` качает файлы                                     | `unsloth/gemma-4-E2B-it-GGUF` + закреплённый commit |
+| `LOCAL_LLM_MODEL_PATH` / `LOCAL_LLM_MMPROJ_PATH` / `LOCAL_LLM_MTP_PATH` | явные пути к GGUF для `scripts/run-llama-server.sh` | `models/gemma/<имя из файлов выше>` |
 | `LLAMA_SERVER_BIN`                               | путь к собранному `llama-server` (локальный запуск)        | из `PATH`                                                                 |
 | `LOCAL_LLM_GPU_LAYERS`                           | сколько слоёв выгрузить на GPU (локальный запуск)          | `0` (CPU)                                                                 |
 | `LOCAL_LLM_HOST` / `LOCAL_LLM_PORT`              | адрес и порт `llama-server` (порт также публикует контейнер) | `0.0.0.0` / `8080`                                                     |
 | `LOCAL_LLM_CTX_SIZE`                             | размер контекста                                                                    | `16384`                                                                    |
-| `LOCAL_LLM_IMAGE_MIN_TOKENS`                     | минимум токенов на изображение (Qwen-VL)                      | `1024`                                                                     |
+| `LOCAL_LLM_IMAGE_MIN_TOKENS`                     | минимум токенов на изображение (динамическое разрешение) | `1024`                                                          |
 
 ---
 
@@ -750,12 +755,12 @@ CI (`.github/workflows/ci.yml`) на каждый пуш и PR: pytest backend'�
   `TaskDrafts` (массив `tasks`), а сохранение остаётся за `knowledge`. Модель
   можно выключить (`LOCAL_LLM_ENABLED=false`), и остальные сценарии
   продолжат работать.
-- **Почему модели не в git, а скачиваются.** GGUF-файлы весят 3.4 ГБ;
-  GitHub отклоняет файлы больше 100 МБ, а бесплатный Git LFS (1 ГБ) их не
-  вмещает. Поэтому в git лежат только `scripts/models.lock` с ревизией
-  Hugging Face и SHA256, а `make models` скачивает те же файлы на любом ПК.
-  Это воспроизводимее, чем «у меня модель есть, а у тебя нет», и не
-  раздувает историю репозитория.
+- **Почему модели не в git, а скачиваются.** Три GGUF-файла Gemma весят
+  ~4.3 ГБ; GitHub отклоняет файлы больше 100 МБ, а бесплатный Git LFS
+  (1 ГБ) их не вмещает. Поэтому в git лежат только `scripts/models.lock`
+  с ревизией Hugging Face и SHA256, а `make models` скачивает те же файлы
+  на любом ПК. Это воспроизводимее, чем «у меня модель есть, а у тебя нет»,
+  и не раздувает историю репозитория.
 
 ---
 
@@ -772,7 +777,9 @@ CI (`.github/workflows/ci.yml`) на каждый пуш и PR: pytest backend'�
 | Google Calendar не появляется в списке адаптеров    | нужен `credentials.json` (Google Cloud Console) по пути `GOOGLE_CREDENTIALS_FILE`                                                                                                                                                                                                                                                                                                                                                       |
 | Клоны занятий в расписании                               | устаревший кэш → удалить `data/integration_cache.db` и нажать «Обновить с портала»                                                                                                                                                                                                                                                                                                                     |
 | «Локальная модель недоступна» при распознавании | не запущен `llama-server` или неверный `LOCAL_LLM_BASE_URL` → в Docker: `docker compose ps`, `docker compose logs llm`, адрес API — `http://llm:8080`; локально: `make llm-dev` и `curl --noproxy '*' http://localhost:8080/health` |
-| Фото не распознаются, текст — да                 | `llama-server` запущен без `mmproj` → проверьте `LOCAL_LLM_MMPROJ_FILE`, пересоздайте контейнер: `docker compose up -d --force-recreate llm`; локально — `make models` |
+| Фото не распознаются, текст — да                 | `llama-server` запущен без `mmproj` → проверьте `LOCAL_LLM_MODELS_DIR` и `LOCAL_LLM_MMPROJ_FILE` (по умолчанию `models/gemma/mmproj-F16.gguf`), пересоздайте контейнер: `docker compose up -d --force-recreate llm`; локально — `make models` |
+| Gemma 4 не загружается, `unknown model architecture` | устаревший `llama-server` или Docker-образ → обновите образ (`docker compose pull llm`) или пересоберите локальный `llama-server` из свежей версии llama.cpp |
+| MTP не ускоряет генерацию или падает с ошибкой draft | проверьте `LOCAL_LLM_MTP_FILE` и наличие `models/gemma/mtp-gemma-4-E2B-it.gguf` (`make models` скачает файл); локальный скрипт без MTP продолжит работу, но медленнее, а в Docker файл должен быть на месте |
 | `make models` не скачивает модели | нет сети/мешает прокси → повторите команду (скачивание продолжится с `.part`); проверьте `curl -I https://huggingface.co`, при необходимости задайте `HTTPS_PROXY` |
 
 ---
@@ -780,6 +787,22 @@ CI (`.github/workflows/ci.yml`) на каждый пуш и PR: pytest backend'�
 ## Дневник работы
 
 Живой журнал ключевых решений. Новые записи — сверху.
+
+### 25.11.2026 — переход на Gemma 4 E2B
+
+- Локальное распознавание задач переведено с Qwen3.5 4B на мультимодальную
+  **Gemma 4 E2B**. Это касается и значений по умолчанию: `LOCAL_LLM_MODEL`
+  теперь `gemma-4-e2b`, а `make models` скачивает Gemma.
+- Используются три файла из `models/gemma/`: основная модель
+  `gemma-4-E2B-it-UD-Q4_K_XL.gguf`, мультимодальный проектор
+  `mmproj-F16.gguf` и MTP-драфтер `mtp-gemma-4-E2B-it.gguf`.
+- `llama-server` запускается с `--spec-type draft-mtp`,
+  `--spec-draft-model` и `--spec-draft-n-max 4`: MTP-драфтер ускоряет
+  генерацию спекулятивным декодированием.
+- Репозиторий моделей — `unsloth/gemma-4-E2B-it-GGUF` на закреплённой
+  ревизии; SHA256 всех трёх файлов лежит в `scripts/models.lock`.
+- Если остался старый `.env` с Qwen, обновите `LOCAL_LLM_*` по
+  `.env.example` (или скопируйте его заново).
 
 ### 04.11.2026 — задачи из нескольких файлов и несколько задач через локальную LLM
 
@@ -957,7 +980,7 @@ PostgreSQL и API-клиенты; `integration_module` — синхрониза�
 модули без общего контракта складываются в репозиторий, но не работают
 вместе.
 
----
+---~~~~
 
 ## Командная работа
 

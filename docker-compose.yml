@@ -16,7 +16,7 @@ services:
       INTEGRATIONS_BACKGROUND_SYNC_ENABLED: ${INTEGRATIONS_BACKGROUND_SYNC_ENABLED:-true}
       LOCAL_LLM_ENABLED: ${LOCAL_LLM_ENABLED:-true}
       LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-http://llm:8080}
-      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-qwen3.5-4b}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-gemma-4-e2b}
       LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
       LOCAL_LLM_TIMEOUT_SECONDS: ${LOCAL_LLM_TIMEOUT_SECONDS:-180}
       LOCAL_LLM_MAX_TOKENS: ${LOCAL_LLM_MAX_TOKENS:-1024}
@@ -66,18 +66,25 @@ services:
       LLAMA_ARG_PORT: 8080
     command:
       - --model
-      - /models/${LOCAL_LLM_MODEL_FILE:-Qwen3.5-4B-UD-Q4_K_XL.gguf}
+      - /models/${LOCAL_LLM_MODEL_FILE:-gemma-4-E2B-it-UD-Q4_K_XL.gguf}
       - --mmproj
       - /models/${LOCAL_LLM_MMPROJ_FILE:-mmproj-F16.gguf}
+      - --spec-type
+      - draft-mtp
+      - --spec-draft-model
+      - /models/${LOCAL_LLM_MTP_FILE:-mtp-gemma-4-E2B-it.gguf}
+      - --spec-draft-n-max
+      - ${LOCAL_LLM_MTP_N_MAX:-4}
       - --alias
-      - ${LOCAL_LLM_MODEL:-qwen3.5-4b}
+      - ${LOCAL_LLM_MODEL:-gemma-4-e2b}
       - --ctx-size
       - ${LOCAL_LLM_CTX_SIZE:-16384}
       - --image-min-tokens
       - ${LOCAL_LLM_IMAGE_MIN_TOKENS:-1024}
       - --jinja
     volumes:
-      - ./models:/models:ro
+      # Папка с файлами Gemma (модель, mmproj, MTP-драфтер).
+      - ./${LOCAL_LLM_MODELS_DIR:-models/gemma}:/models:ro
     ports:
       - "${LOCAL_LLM_PORT:-8080}:8080"
     healthcheck:

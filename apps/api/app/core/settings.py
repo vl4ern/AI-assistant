@@ -59,7 +59,7 @@ class AppSettings(BaseModel):
         "on",
     }
     local_llm_base_url: str = os.getenv("LOCAL_LLM_BASE_URL", "http://localhost:8080")
-    local_llm_model: str = os.getenv("LOCAL_LLM_MODEL", "qwen3.5-4b")
+    local_llm_model: str = os.getenv("LOCAL_LLM_MODEL", "gemma-4-e2b")
     local_llm_api_key: str = os.getenv("LOCAL_LLM_API_KEY", "")
     local_llm_timeout_seconds: int = Field(
         default=int(os.getenv("LOCAL_LLM_TIMEOUT_SECONDS", "180")), ge=5, le=600

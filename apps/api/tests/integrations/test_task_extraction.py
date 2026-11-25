@@ -405,7 +405,7 @@ def test_llama_client_sends_json_mode_and_disables_thinking() -> None:
 
     client = LlamaServerChatClient(
         base_url="http://localhost:8080",
-        model="qwen3.5-4b",
+        model="gemma-4-e2b",
         request_fn=fake_post,
     )
 
@@ -420,7 +420,7 @@ def test_llama_client_sends_json_mode_and_disables_thinking() -> None:
     payload = calls[0][1]["json"]
     assert payload["response_format"] == {"type": "json_object"}
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
-    assert payload["model"] == "qwen3.5-4b"
+    assert payload["model"] == "gemma-4-e2b"
 
 
 def test_llama_client_does_not_duplicate_v1_in_url() -> None:
