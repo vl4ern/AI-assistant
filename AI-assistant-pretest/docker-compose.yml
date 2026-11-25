@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     environment:
+      PYTHONUNBUFFERED: 1
       API_HOST: ${API_HOST:-0.0.0.0}
       API_PORT: ${API_PORT:-8000}
       DATABASE_URL: postgresql://assistant:assistant@postgres:5432/assistant_db
@@ -32,8 +33,11 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "${API_PORT:-8000}:8000"
+      - "8080:8080"
     volumes:
       - ./apps/api:/app
+      - ./secrets/credentials.json:/app/credentials.json:ro
+      - ./secrets/google_token:/google_token.pickle:ro
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
       postgres:
@@ -79,9 +83,9 @@ services:
     volumes:
       - ./models:/models:ro
     ports:
-      - "${LOCAL_LLM_PORT:-8080}:8080"
+      - "${LOCAL_LLM_PORT:-8081}:8080"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
       interval: 5s
       timeout: 5s
       retries: 120
@@ -94,7 +98,6 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-assistant}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-assistant}
       POSTGRES_DB: ${POSTGRES_DB:-assistant_db}
-
 
     volumes:
       - postgres_data:/var/lib/postgresql/data

@@ -40,6 +40,7 @@ google_token.pickle
 *.db-shm
 *.db-wal
 
+secrets
 # Logs
 *.log
 

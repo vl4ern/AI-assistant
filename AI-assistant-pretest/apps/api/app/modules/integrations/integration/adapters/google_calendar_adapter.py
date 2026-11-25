@@ -51,11 +51,17 @@ class GoogleCalendarAdapter(IServiceAdapter):
         except Exception:  # noqa: BLE001 — битый/чужой файл токена
             return None
         # Токен, выданный на старый scope (readonly), для записи не годится.
-        if creds is not None and hasattr(creds, "has_scopes") and not creds.has_scopes(SCOPES):
+        if (
+            creds is not None
+            and hasattr(creds, "has_scopes")
+            and not creds.has_scopes(SCOPES)
+        ):
             return None
         return creds
 
-    def authenticate(self, token: Optional[str] = None, interactive: bool = True) -> bool:
+    def authenticate(
+        self, token: Optional[str] = None, interactive: bool = True
+    ) -> bool:
         """
         OAuth 2.0.
 
@@ -80,8 +86,22 @@ class GoogleCalendarAdapter(IServiceAdapter):
                     f"Файл {self.credentials_file} не найден. "
                     "Скачайте OAuth-ключ (Desktop app) из Google Cloud Console."
                 )
-            flow = InstalledAppFlow.from_client_secrets_file(self.credentials_file, SCOPES)
-            creds = flow.run_local_server(port=0)
+            flow = InstalledAppFlow.from_client_secrets_file(
+                self.credentials_file, SCOPES
+            )
+            auth_url, _ = flow.authorization_url(prompt="consent")
+            
+            print("\n" + "="*50)
+            print("ПЕРЕЙДИ ПО ЭТОЙ ССЫЛКЕ В БРАУЗЕРЕ:")
+            print(auth_url)
+            print("="*50 + "\n")
+
+            creds = flow.run_local_server(
+                port=8080,  # Фиксированный порт для проброса
+                bind_addr="0.0.0.0",  # Слушать на всех интерфейсах внутри контейнера
+                open_browser=False,
+                prompt="consent",
+            )
 
         with open(self.token_file, "wb") as f:
             pickle.dump(creds, f)
@@ -112,7 +132,9 @@ class GoogleCalendarAdapter(IServiceAdapter):
                     # Без since берём последние 90 дней, а не весь календарь.
                     effective_since = since or (datetime.now() - timedelta(days=90))
                     if effective_since.tzinfo is None:
-                        effective_since = effective_since.astimezone()  # локальный → aware
+                        effective_since = (
+                            effective_since.astimezone()
+                        )  # локальный → aware
                     time_min = effective_since.astimezone(timezone.utc).strftime(
                         "%Y-%m-%dT%H:%M:%SZ"
                     )
@@ -129,7 +151,9 @@ class GoogleCalendarAdapter(IServiceAdapter):
                 events_result = request.execute()
             except Exception as e:  # noqa: BLE001
                 # syncToken устарел (410) — сбрасываем и начинаем с нуля.
-                if self.sync_token and ("410" in str(e) or "sync token" in str(e).lower()):
+                if self.sync_token and (
+                    "410" in str(e) or "sync token" in str(e).lower()
+                ):
                     self.sync_token = None
                     page_token = None
                     tasks = []
@@ -178,7 +202,11 @@ class GoogleCalendarAdapter(IServiceAdapter):
             if task.external_id:
                 updated = (
                     self.service.events()
-                    .update(calendarId=self.calendar_id, eventId=task.external_id, body=event_body)
+                    .update(
+                        calendarId=self.calendar_id,
+                        eventId=task.external_id,
+                        body=event_body,
+                    )
                     .execute()
                 )
                 if updated.get("id"):
