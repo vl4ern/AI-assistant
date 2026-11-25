@@ -11,8 +11,8 @@ from app.modules.integrations.integration.adapters.llama_server_client import (
 )
 from app.modules.integrations.integration.task_extraction import TaskDraftExtractor
 from app.modules.integrations.service import IntegrationService
+from app.modules.intelligence.cp_sat_scheduler import CpSatScheduler
 from app.modules.intelligence.ml_scoring import MLScoringService
-from app.modules.intelligence.scheduler import GreedyScheduler
 from app.modules.intelligence.service import SchedulerService
 from app.modules.knowledge.in_memory_repository import InMemoryKnowledgeRepository
 from app.modules.knowledge.models import EventCreate, TaskCreate
@@ -52,11 +52,12 @@ class Container:
             secret=settings.auth_token_secret,
         )
 
-        self.scheduler = GreedyScheduler(
+        self.scheduler = CpSatScheduler(
             slot_minutes=settings.schedule_slot_minutes,
             horizon_days=settings.schedule_horizon_days,
             wake_start_hour=settings.wake_start_hour,
             wake_end_hour=settings.wake_end_hour,
+            max_time_in_seconds=settings.schedule_solver_time_seconds,
         )
 
         self.scoring_service = MLScoringService(

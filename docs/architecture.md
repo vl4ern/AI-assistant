@@ -15,6 +15,7 @@
 
 - Frontend: React + Vite + TypeScript
 - Backend API: FastAPI + Pydantic
+- Планировщик задач: OR-Tools (CP-SAT) с жадким fallback'ом
 - База данных (следующий шаг): PostgreSQL
 - Интеграции: provider-based подход (Google, GitHub, LMS)
 - Тесты: pytest (backend), ESLint (frontend)

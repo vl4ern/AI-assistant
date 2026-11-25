@@ -206,7 +206,8 @@ paths:
       summary: Rebuild schedule
       description: >-
         Пересчитывает план по задачам/событиям с учетом ML-score,
-        зависимостей и greedy-раскладки.
+        зависимостей и оптимальной (CP-SAT) раскладки. Если OR-Tools
+        недоступен — жадный fallback.
       operationId: rebuildSchedule
       security:
         - bearerAuth: []

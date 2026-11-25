@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from app.modules.intelligence.service import SchedulerService
 from app.modules.intelligence.ml_scoring import MLScoringService
-from app.modules.intelligence.scheduler import GreedyScheduler
+from app.modules.intelligence.cp_sat_scheduler import CpSatScheduler
 from app.modules.intelligence.models import ReorderFeedbackRequest
 from app.modules.knowledge.in_memory_repository import InMemoryKnowledgeRepository
 from app.modules.knowledge.models import TaskCreate, EventCreate
@@ -10,7 +10,7 @@ from app.modules.knowledge.models import TaskCreate, EventCreate
 
 def test_rebuild_clears_dirty_flag() -> None:
     repo = InMemoryKnowledgeRepository()
-    scheduler = GreedyScheduler(slot_minutes=30, horizon_days=1, wake_start_hour=8, wake_end_hour=22)
+    scheduler = CpSatScheduler(slot_minutes=30, horizon_days=1, wake_start_hour=8, wake_end_hour=22)
     scoring = MLScoringService(wake_start_hour=8, wake_end_hour=22, horizon_days=7)
     service = SchedulerService(repo, scheduler, scoring)
     # repo по умолчанию помечает расписание как dirty после создания задачи
@@ -22,7 +22,7 @@ def test_rebuild_clears_dirty_flag() -> None:
 
 def test_today_when_no_tasks() -> None:
     repo = InMemoryKnowledgeRepository()
-    scheduler = GreedyScheduler(slot_minutes=30, horizon_days=1, wake_start_hour=8, wake_end_hour=22)
+    scheduler = CpSatScheduler(slot_minutes=30, horizon_days=1, wake_start_hour=8, wake_end_hour=22)
     scoring = MLScoringService(wake_start_hour=8, wake_end_hour=22, horizon_days=7)
     service = SchedulerService(repo, scheduler, scoring)
     today = service.today()
@@ -45,7 +45,7 @@ def test_today_sorts_by_start() -> None:
                    scheduled_start=day_start + timedelta(hours=1),
                    scheduled_end=day_start + timedelta(hours=2))
     )
-    scheduler = GreedyScheduler(slot_minutes=30, horizon_days=1, wake_start_hour=8, wake_end_hour=22)
+    scheduler = CpSatScheduler(slot_minutes=30, horizon_days=1, wake_start_hour=8, wake_end_hour=22)
     scoring = MLScoringService(wake_start_hour=8, wake_end_hour=22, horizon_days=7)
     service = SchedulerService(repo, scheduler, scoring)
     today = service.today()
@@ -55,7 +55,7 @@ def test_today_sorts_by_start() -> None:
 
 def test_on_task_status_updated_ignores_non_completed() -> None:
     repo = InMemoryKnowledgeRepository()
-    scheduler = GreedyScheduler(slot_minutes=30, horizon_days=1, wake_start_hour=8, wake_end_hour=22)
+    scheduler = CpSatScheduler(slot_minutes=30, horizon_days=1, wake_start_hour=8, wake_end_hour=22)
     scoring = MLScoringService(wake_start_hour=8, wake_end_hour=22, horizon_days=7)
     service = SchedulerService(repo, scheduler, scoring)
     task = repo.create_task(TaskCreate(title="InProgress", workspace_id="study"))
@@ -66,7 +66,7 @@ def test_on_task_status_updated_ignores_non_completed() -> None:
 
 def test_on_task_status_updated_duplicate_completion_not_re_recorded() -> None:
     repo = InMemoryKnowledgeRepository()
-    scheduler = GreedyScheduler(slot_minutes=30, horizon_days=1, wake_start_hour=8, wake_end_hour=22)
+    scheduler = CpSatScheduler(slot_minutes=30, horizon_days=1, wake_start_hour=8, wake_end_hour=22)
     scoring = MLScoringService(wake_start_hour=8, wake_end_hour=22, horizon_days=7, retrain_batch_size=20)
     service = SchedulerService(repo, scheduler, scoring)
     task = repo.create_task(TaskCreate(title="Done", workspace_id="study"))
@@ -82,7 +82,7 @@ def test_on_task_status_updated_duplicate_completion_not_re_recorded() -> None:
 
 def test_record_reorder_feedback_moved_task_not_found() -> None:
     repo = InMemoryKnowledgeRepository()
-    scheduler = GreedyScheduler(slot_minutes=30, horizon_days=1, wake_start_hour=8, wake_end_hour=22)
+    scheduler = CpSatScheduler(slot_minutes=30, horizon_days=1, wake_start_hour=8, wake_end_hour=22)
     scoring = MLScoringService(wake_start_hour=8, wake_end_hour=22, horizon_days=7)
     service = SchedulerService(repo, scheduler, scoring)
     with pytest.raises(ValueError, match="Moved task not found"):

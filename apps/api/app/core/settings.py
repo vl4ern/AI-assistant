@@ -17,6 +17,11 @@ class AppSettings(BaseModel):
     schedule_slot_minutes: int = Field(
         default=int(os.getenv("SCHEDULE_SLOT_MINUTES", "30")), ge=15, le=120
     )
+    schedule_solver_time_seconds: float = Field(
+        default=float(os.getenv("SCHEDULE_SOLVER_TIME_SECONDS", "10")),
+        ge=1,
+        le=60,
+    )
     wake_start_hour: int = Field(default=int(os.getenv("WAKE_START_HOUR", "8")), ge=0, le=23)
     wake_end_hour: int = Field(default=int(os.getenv("WAKE_END_HOUR", "23")), ge=1, le=24)
     ml_retrain_batch_size: int = Field(

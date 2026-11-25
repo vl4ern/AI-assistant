@@ -127,7 +127,7 @@ make api-install   # venv + зависимости backend
 make api-dev      # API на http://localhost:8000
 make web-install  # зависимости frontend
 make web-dev      # интерфейс на http://localhost:5173
-make api-test     # тесты backend (107 шт.)
+make api-test     # тесты backend (118 шт.)
 ```
 
 `.env` читают и Makefile, и backend (`app/core/settings.py` подключает
@@ -197,7 +197,8 @@ LOCAL_LLM_BASE_URL=http://host.docker.internal:8080 \
 ### Стек
 
 - **Backend**: Python 3.12, FastAPI, Pydantic v2, PostgreSQL 16
-  (с in-memory фолбэком), SQLite для кэша интеграций.
+  (с in-memory фолбэком), SQLite для кэша интеграций, OR-Tools (CP-SAT) —
+  для планировщика.
 - **Frontend**: React 19, TypeScript, Vite. Без UI-библиотек — один CSS-файл
   с переменными, тёмно-синяя тема.
 - **Инфраструктура**: docker-compose (api + web + postgres + llm),
@@ -434,7 +435,8 @@ integration/
 ### `intelligence` — планировщик и скоринг
 
 ```text
-scheduler.py      GreedyScheduler — жадное заполнение свободных окон
+cp_sat_scheduler.py CpSatScheduler — планировщик на CP-SAT (OR-Tools), жадный — fallback
+scheduler.py      GreedyScheduler — жадное заполнение свободных окон (fallback)
 ml_scoring.py     MLScoringService — линейная регрессия «важности» задач
 service.py        SchedulerService — оркестратор (rebuild/today/feedback)
 models.py         SchedulePlan, ScheduledSlot, TodayView, ReorderFeedback
@@ -446,11 +448,17 @@ utils/time_utils.py  рабочие окна бодрствования
 1. Берём факты: активные задачи + события (и личные, и общие пары).
 2. Сбрасываем старые интервалы у подвижных задач.
 3. `MLScoringService.build_score_map()` — скор всех задач.
-4. `GreedyScheduler.build_plan()` — по убыванию скора раскладывает задачи
-   в свободные окна: сутки минус события минус нерабочие часы
-   (`WAKE_START_HOUR..WAKE_END_HOUR`), шаг слота `SCHEDULE_SLOT_MINUTES`.
-   Учитывает зависимости (`depends_on`) и разбиение длинных задач
-   (`allow_split`, `min_chunk_minutes`).
+4. `CpSatScheduler.build_plan()` — задачи раскладываются в свободные окна
+   как задача CP-SAT (OR-Tools): окна бодрствования минус события минус
+   нерабочие часы (`WAKE_START_HOUR..WAKE_END_HOUR`), шаг слота
+   `SCHEDULE_SLOT_MINUTES`. Ограничения: дедлайны, зависимости
+   (`depends_on`), запрет пересечений, дробление задач
+   (`allow_split`, `min_chunk_minutes`). Решатель максимизирует суммарную
+   ценность запланированной работы (своевременное выполнение важнее
+   позднего, целый блок предпочтительнее дробления). Если OR-Tools
+   недоступен или время работы решателя (`SCHEDULE_SOLVER_TIME_SECONDS`,
+   по умолчанию 10 с) истекло — используется `GreedyScheduler` (жадный
+   fallback), чтобы API оставался работоспособным.
 5. Интервалы сохраняются в задачах, флаг «расписание грязное» снимается.
 
 **Скоринг** — SGD-регрессия поверх трёх признаков:
@@ -653,7 +661,7 @@ def test_my_service():
 ## Тесты и CI
 
 ```bash
-make api-test                        # 107 тестов
+make api-test                        # 118 тестов
 cd apps/web/frontend && npm run lint # линт фронта
 ```
 
@@ -686,6 +694,7 @@ CI (`.github/workflows/ci.yml`) на каждый пуш и PR: pytest backend'�
 | `AUTH_TOKEN_SECRET`                               | секрет подписи токенов (в проде — случайная строка!) | dev-строка                                                             |
 | `SCHEDULE_HORIZON_DAYS`                           | горизонт планировщика                                                      | `30`                                                                       |
 | `SCHEDULE_SLOT_MINUTES`                           | шаг слота плана                                                                   | `30`                                                                       |
+| `SCHEDULE_SOLVER_TIME_SECONDS`                   | лимит времени работы CP-SAT-решателя при перестроении плана                  | `10`                                                                       |
 | `WAKE_START_HOUR` / `WAKE_END_HOUR`             | часы бодрствования                                                            | `8` / `23`                                                               |
 | `ML_RETRAIN_BATCH_SIZE`                           | пакет дообучения скоринга                                               | `20`                                                                       |
 | `ML_OVERDUE_BONUS`                                | бонус за завершение просроченной                                  | `10`                                                                       |
@@ -761,6 +770,14 @@ CI (`.github/workflows/ci.yml`) на каждый пуш и PR: pytest backend'�
   с ревизией Hugging Face и SHA256, а `make models` скачивает те же файлы
   на любом ПК. Это воспроизводимее, чем «у меня модель есть, а у тебя нет»,
   и не раздувает историю репозитория.
+- **Почему планировщик на CP-SAT, а не только жадный.** Жадный алгоритм
+  заполнял свободные окна в порядке убывания скоров и не пересчитывал
+  уже запланированное при появлении новых конфликтов — мог потратить
+  лучшие слоты на менее важные задачи. CP-SAT из OR-Tools решает задачу
+  набора интервалов целиком (окна, дедлайны, зависимости, дробление) и
+  максимизирует суммарную ценность запланированной работы. Жадный
+  остаётся fallback'ом, если OR-Tools не установлен или время работы
+  решателя истекло.
 
 ---
 
@@ -787,6 +804,33 @@ CI (`.github/workflows/ci.yml`) на каждый пуш и PR: pytest backend'�
 ## Дневник работы
 
 Живой журнал ключевых решений. Новые записи — сверху.
+
+### 25.11.2026 — переход на CP-SAT планировщик
+
+- Жадный `GreedyScheduler` признан недостаточно эффективным: заполнял
+  окна в порядке убывания скоров без глобального пересчёта, мог не
+  найти лучшую комбинацию задач.
+- Добавлен `CpSatScheduler` (`apps/api/app/modules/intelligence/
+  cp_sat_scheduler.py`) на базе CP-SAT из OR-Tools: задачи раскладываются
+  по слотам как constrained-оптимизация (окна бодрствования, события,
+  несдвигаемые задачи, дедлайны, зависимости, дробление), целевая функция
+  максимизирует ценность запланированной работы.
+- Ограничения прежнего планировщика сохранены: рабочие часы, события,
+  дедлайны, `depends_on`, `allow_split`/`min_chunk_minutes`, запрет
+  пересечений.
+- Если OR-Tools не установлен или время работы решателя истекло
+  (`SCHEDULE_SOLVER_TIME_SECONDS`, дефолт 10 с) — используется жадный
+  алгоритм (`GreedyScheduler`) как fallback: API не ломается.
+- `GreedyScheduler` не удалён: стал базовой реализацией
+  `SchedulerBase` + fallback в CP-SAT; старые тесты жадного алгоритма
+  (`tests/intelligence/test_scheduler.py`) не тронуты.
+- `ortools>=9.10,<10` добавлен в `apps/api/requirements.txt`; переменная
+  окружения `SCHEDULE_SOLVER_TIME_SECONDS` добавлена в settings и
+  `.env.example`.
+- Тесты: новый `tests/intelligence/test_cp_sat_scheduler.py` (8 сценариев:
+  приоритет, предпочтение двух medium над одним long, дробление, целый
+  блок, остаток, дедлайн, зависимости, события/несдвигаемые, пустой ввод,
+  fallback); остальные сценарии модуля переведены на CP-SAT.
 
 ### 25.11.2026 — переход на Gemma 4 E2B
 

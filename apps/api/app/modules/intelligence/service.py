@@ -10,7 +10,7 @@ from app.modules.intelligence.models import (
     SchedulePlan,
     TodayView,
 )
-from app.modules.intelligence.scheduler import GreedyScheduler
+from app.modules.intelligence.scheduler import SchedulerBase
 from app.modules.knowledge.models import Task
 from app.modules.knowledge.repository import KnowledgeRepository
 
@@ -29,7 +29,7 @@ class SchedulerService:
     def __init__(
         self,
         repository: KnowledgeRepository,
-        scheduler: GreedyScheduler,
+        scheduler: SchedulerBase,
         scoring_service: MLScoringService,
     ) -> None:
         """Сохраняет ссылки на репозиторий, планировщик и сервис скоринга."""

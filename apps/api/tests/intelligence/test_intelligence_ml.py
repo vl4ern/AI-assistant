@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.modules.intelligence.ml_scoring import MLScoringService
 from app.modules.intelligence.models import ReorderFeedbackRequest
-from app.modules.intelligence.scheduler import GreedyScheduler
+from app.modules.intelligence.cp_sat_scheduler import CpSatScheduler
 from app.modules.intelligence.service import SchedulerService
 from app.modules.knowledge.in_memory_repository import InMemoryKnowledgeRepository
 from app.modules.knowledge.models import Event, EventCreate, Task, TaskCreate
@@ -74,7 +74,7 @@ def test_scheduler_splits_when_whole_task_cannot_fit() -> None:
         ),
     ]
 
-    scheduler = GreedyScheduler(
+    scheduler = CpSatScheduler(
         slot_minutes=30,
         horizon_days=1,
         wake_start_hour=8,
@@ -99,7 +99,7 @@ def test_reorder_feedback_uses_neighbor_average_target() -> None:
     b = repository.create_task(TaskCreate(title="B", workspace_id="study"))
     c = repository.create_task(TaskCreate(title="C", workspace_id="study"))
 
-    scheduler = GreedyScheduler(
+    scheduler = CpSatScheduler(
         slot_minutes=30,
         horizon_days=1,
         wake_start_hour=8,
@@ -167,7 +167,7 @@ def test_integration_rebuild_today_reorder_completion_retrains_batch() -> None:
 
     # Часы 0–24, чтобы тест не зависел от времени запуска:
     # при «вечернем» запуске окно 8–23 уже не вмещает задачи.
-    scheduler = GreedyScheduler(
+    scheduler = CpSatScheduler(
         slot_minutes=30,
         horizon_days=2,
         wake_start_hour=0,
