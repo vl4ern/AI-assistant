@@ -457,6 +457,23 @@ integration/
 - `GET /v1/tasks/extract/prompt` показывает полный промпт текущего
   пользователя (кнопка «Показать системный промт» в окне распознавания).
 
+**Подключение Google Calendar (OAuth):**
+
+1. Backend должен видеть OAuth-креды: `GOOGLE_CREDENTIALS_FILE`
+   (дефолт — `credentials.json`, Desktop-приложение из Google Cloud Console,
+   проект `ai-assistant-student`).
+2. На странице с интеграциями нажмите **«Подключить Google»**. Backend запускает
+   `InstalledAppFlow`: в логах контейнера (`docker compose logs -f api`) появится
+   ссылка на страницу согласия — откройте её в браузере на компьютере пользователя.
+   Callback (`http://localhost:8080/`) обрабатывается локальным OAuth-сервером
+   внутри контейнера; порт `8080` опубликован compose (`8080:8080` → контейнер `:8080`).
+3. После одобрения токен сохраняется в `secrets/google_token/google_token.pickle`
+   (в Docker — в mount `/google_token`, путь берётся из `GOOGLE_TOKEN_FILE` —
+   `/google_token/google_token.pickle`). Том mount'а должен быть **read-write**:
+   при read-only запись токена после согласия падает.
+4. После успешного согласия статус меняется на «Подключён»: далее доступны
+   «Импорт» из Google и «Экспорт» плана в Google Calendar.
+
 **Фоновая синхронизация** стартует вместе с приложением (lifespan в
 `main.py`) и опрашивает IIS раз в 2 часа. `RetryQueue` возвращает
 повторные попытки при сбоях.
@@ -832,6 +849,7 @@ CI (`.github/workflows/ci.yml`) на каждый пуш и PR: pytest backend'�
 | Расписание пустое                                               | нет `IIS_GROUP_NUMBER` в `.env` или нет доступа к порталу → кнопка «Загрузить из файла» или добавить группу и перезапустить                                                                                                                                                                                                                                       |
 | `соединение с базой` в логах при старте        | Postgres не поднят → API перейдёт на in-memory (данные до перезапуска); для постоянных данных `docker compose up`                                                                                                                                                                                                                                                                           |
 | Google Calendar не появляется в списке адаптеров    | нужен `credentials.json` (Google Cloud Console) по пути `GOOGLE_CREDENTIALS_FILE`                                                                                                                                                                                                                                                                                                                                                       |
+| Кнопка «Подключить Google» не работает / ничего не происходит | проверьте, что api поднялся (`docker compose ps`), mount `secrets/google_token` не read-only, порт `8080` опубликован; интерактивный OAuth ждёт браузер и callback `http://localhost:8080/`; таймаут интерактивной авторизации — 300 с |
 | Клоны занятий в расписании                               | устаревший кэш → удалить `data/integration_cache.db` и нажать «Обновить с портала»                                                                                                                                                                                                                                                                                                                     |
 | «Локальная модель недоступна» при распознавании | не запущен `llama-server` или неверный `LOCAL_LLM_BASE_URL` → в Docker: `docker compose ps`, `docker compose logs llm`, адрес API — `http://llm:8080`; локально: `make llm-dev` и `curl --noproxy '*' http://localhost:8080/health` |
 | Фото не распознаются, текст — да                 | `llama-server` запущен без `mmproj` → проверьте `LOCAL_LLM_MODELS_DIR` и `LOCAL_LLM_MMPROJ_FILE` (по умолчанию `models/gemma/mmproj-F16.gguf`), пересоздайте контейнер: `docker compose up -d --force-recreate llm`; локально — `make models` |

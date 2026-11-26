@@ -44,8 +44,9 @@ export function GoogleCalendarPanel({ onChanged }: GoogleCalendarPanelProps) {
     setError('');
     try {
       if (kind === 'connect') {
-        setStatus(await connectGoogle());
-        setMessage(t('google.connected'));
+        const newStatus = await connectGoogle();
+        setStatus(newStatus);
+        setMessage(newStatus.connected ? t('google.connected') : t('google.notConnected'));
       } else if (kind === 'import') {
         const result = await importFromGoogle();
         setMessage(t('google.imported', { count: result.synced_items }));

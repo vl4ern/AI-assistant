@@ -27,6 +27,7 @@ services:
       LOCAL_LLM_MAX_TEXT_KB: ${LOCAL_LLM_MAX_TEXT_KB:-256}
       LOCAL_LLM_MAX_IMAGE_MB: ${LOCAL_LLM_MAX_IMAGE_MB:-10}
       LOCAL_LLM_MAX_FILES: ${LOCAL_LLM_MAX_FILES:-3}
+      GOOGLE_TOKEN_FILE: /google_token/google_token.pickle
     # Нужно, только если API в Docker должен ходить к llama-server на хосте
     # (LOCAL_LLM_BASE_URL=http://host.docker.internal:8080).
     extra_hosts:
@@ -37,7 +38,7 @@ services:
     volumes:
       - ./apps/api:/app
       - ./secrets/credentials.json:/app/credentials.json:ro
-      - ./secrets/google_token:/google_token.pickle:ro
+      - ./secrets/google_token:/google_token
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
       postgres:

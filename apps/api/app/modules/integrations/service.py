@@ -219,14 +219,29 @@ class IntegrationService:
         Интерактивная авторизация. Браузер откроется на той машине, где
         запущен backend, поэтому внутри Docker-контейнера этот способ не
         работает — токен нужно получить локально (см. README).
+
+        Блокирующий интерактивный поток ограничиваем по времени, чтобы
+        кнопка «Подключить Google» не зависала бесконечно.
         """
         if self._google_adapter is None:
             raise ValueError(self.google_status().message)
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        executor = ThreadPoolExecutor(max_workers=1)
         try:
-            self._google_adapter.authenticate(interactive=True)
+            future = executor.submit(self._google_adapter.authenticate, interactive=True)
+            authenticated = future.result(timeout=300)
+            executor.shutdown(wait=False)
         except Exception as exc:  # noqa: BLE001
+            executor.shutdown(wait=False)
+            if isinstance(exc, TimeoutError):
+                raise ValueError(
+                    "Время ожидания авторизации в Google истекло — повторите попытку."
+                ) from exc
             raise ValueError(f"Не удалось авторизоваться в Google: {exc}") from exc
-        self._register_google_adapter()
+        if authenticated:
+            self._register_google_adapter()
         return self.google_status()
 
     def export_slots_to_google(self, slots: list) -> GoogleExportResult:
