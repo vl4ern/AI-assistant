@@ -241,7 +241,11 @@ class IntegrationService:
         executor = ThreadPoolExecutor(max_workers=1)
 
         def _authorize() -> bool:
-            authenticated = self._google_adapter.authenticate(interactive=True)
+            try:
+                authenticated = self._google_adapter.authenticate(interactive=True)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[Integrations] Google OAuth background flow failed: {exc}")
+                raise
             if authenticated:
                 self._register_google_adapter()
             return authenticated

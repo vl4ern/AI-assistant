@@ -49,7 +49,18 @@ export function GoogleCalendarPanel({ onChanged }: GoogleCalendarPanelProps) {
         setStatus(status);
         if (status.auth_url && !status.connected) {
           // Автоматически открываем ссылку авторизации в новой вкладке.
-          window.open(status.auth_url, '_blank', 'noopener,noreferrer');
+          // window.open после await может попасть под блокировку всплывающих
+          // окон (user-gesture lost) — поэтому используем fallback через ссылку.
+          const opened = window.open(status.auth_url, '_blank', 'noopener,noreferrer');
+          if (!opened) {
+            const anchor = document.createElement('a');
+            anchor.href = status.auth_url;
+            anchor.target = '_blank';
+            anchor.rel = 'noopener';
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+          }
           // Ждём завершения OAuth-флоу в фоне — обновляем статус.
           for (let attempt = 0; attempt < 40; attempt++) {
             await new Promise((resolve) => setTimeout(resolve, 3000));
