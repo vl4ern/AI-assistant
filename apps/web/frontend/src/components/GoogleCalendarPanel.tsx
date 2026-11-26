@@ -45,8 +45,20 @@ export function GoogleCalendarPanel({ onChanged }: GoogleCalendarPanelProps) {
     try {
       if (kind === 'connect') {
         const newStatus = await connectGoogle();
-        setStatus(newStatus);
-        setMessage(newStatus.connected ? t('google.connected') : t('google.notConnected'));
+        let status = newStatus;
+        setStatus(status);
+        if (status.auth_url && !status.connected) {
+          // Автоматически открываем ссылку авторизации в новой вкладке.
+          window.open(status.auth_url, '_blank', 'noopener,noreferrer');
+          // Ждём завершения OAuth-флоу в фоне — обновляем статус.
+          for (let attempt = 0; attempt < 40; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+            status = await getGoogleStatus();
+            setStatus(status);
+            if (status.connected) break;
+          }
+        }
+        setMessage(status.connected ? t('google.connected') : t('google.notConnected'));
       } else if (kind === 'import') {
         const result = await importFromGoogle();
         setMessage(t('google.imported', { count: result.synced_items }));

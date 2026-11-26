@@ -905,6 +905,10 @@ components:
           nullable: true
         message:
           type: string
+        auth_url:
+          type: string
+          nullable: true
+          description: Ссылка на авторизацию (OAuth), если требуется подключение
       required:
         - configured
         - connected

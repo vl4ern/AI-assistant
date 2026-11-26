@@ -207,42 +207,63 @@ class IntegrationService:
             message = "Google Calendar не подключён — нажмите «Подключить»."
         else:
             message = "Google Calendar подключён."
-        return GoogleCalendarStatus(
+        status = GoogleCalendarStatus(
             configured=configured,
             connected=connected,
             last_sync_at=(last_sync if last_sync and last_sync != datetime.min else None),
             message=message,
         )
+        if configured and not connected and self._google_adapter is not None:
+            status.auth_url = self._google_adapter.last_auth_url
+        return status
 
     def connect_google(self) -> GoogleCalendarStatus:
         """
-        Интерактивная авторизация. Браузер откроется на той машине, где
-        запущен backend, поэтому внутри Docker-контейнера этот способ не
-        работает — токен нужно получить локально (см. README).
+        Запускает интерактивную OAuth-авторизацию в фоновом потоке и
+        немедленно возвращает статус с `auth_url` — ссылкой для
+        автоматического открытия в браузере (фронтенд через window.open).
 
-        Блокирующий интерактивный поток ограничиваем по времени, чтобы
-        кнопка «Подключить Google» не зависала бесконечно.
+        Блокирующий интерактивный поток (локальный callback server + ожидание
+        ответа Google) ограничен таймаутом внутри адаптера; поток продолжает
+        выполняться в фоне, пока пользователь проходит согласие в браузере.
         """
         if self._google_adapter is None:
             raise ValueError(self.google_status().message)
 
+        import time
         from concurrent.futures import ThreadPoolExecutor
 
         executor = ThreadPoolExecutor(max_workers=1)
-        try:
-            future = executor.submit(self._google_adapter.authenticate, interactive=True)
-            authenticated = future.result(timeout=300)
-            executor.shutdown(wait=False)
-        except Exception as exc:  # noqa: BLE001
-            executor.shutdown(wait=False)
-            if isinstance(exc, TimeoutError):
-                raise ValueError(
-                    "Время ожидания авторизации в Google истекло — повторите попытку."
-                ) from exc
-            raise ValueError(f"Не удалось авторизоваться в Google: {exc}") from exc
-        if authenticated:
-            self._register_google_adapter()
-        return self.google_status()
+
+        def _authorize() -> bool:
+            authenticated = self._google_adapter.authenticate(interactive=True)
+            if authenticated:
+                self._register_google_adapter()
+            return authenticated
+
+        executor.submit(_authorize)
+        executor.shutdown(wait=False)
+
+        auth_url = None
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
+            candidate = (
+                self._google_adapter.last_auth_url
+                if self._google_adapter is not None
+                else None
+            )
+            if candidate:
+                auth_url = candidate
+                break
+            time.sleep(0.05)
+
+        status = GoogleCalendarStatus(
+            configured=True,
+            connected=False,
+            message="Google Calendar: ожидание авторизации…",
+        )
+        status.auth_url = auth_url
+        return status
 
     def export_slots_to_google(self, slots: list) -> GoogleExportResult:
         """

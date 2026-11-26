@@ -92,6 +92,7 @@ export type GoogleCalendarStatus = {
   connected: boolean;
   last_sync_at: string | null;
   message: string;
+  auth_url: string | null;
 };
 
 export type GoogleExportResult = {

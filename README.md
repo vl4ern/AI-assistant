@@ -463,10 +463,13 @@ integration/
    (дефолт — `credentials.json`, Desktop-приложение из Google Cloud Console,
    проект `ai-assistant-student`).
 2. На странице с интеграциями нажмите **«Подключить Google»**. Backend запускает
-   `InstalledAppFlow`: в логах контейнера (`docker compose logs -f api`) появится
-   ссылка на страницу согласия — откройте её в браузере на компьютере пользователя.
-   Callback (`http://localhost:8080/`) обрабатывается локальным OAuth-сервером
-   внутри контейнера; порт `8080` опубликован compose (`8080:8080` → контейнер `:8080`).
+   интерактивную OAuth-авторизацию в фоновом потоке и возвращает `auth_url`
+   (`POST /v1/integrations/google/connect` → `GoogleCalendarStatus.auth_url`).
+   Фронтенд автоматически открывает эту ссылку через `window.open` в новой вкладке —
+   не нужно смотреть логи терминала. Callback (`http://localhost:8080/`) обрабатывается
+   локальным OAuth-сервером внутри контейнера; порт `8080` опубликован compose
+   (`8080:8080` → контейнер `:8080`). Блокирующий поток ограничен таймаутом (300 с),
+   после ответа/таймаута сервер закрывается и порт освобождается.
 3. После одобрения токен сохраняется в `secrets/google_token/google_token.pickle`
    (в Docker — в mount `/google_token`, путь берётся из `GOOGLE_TOKEN_FILE` —
    `/google_token/google_token.pickle`). Том mount'а должен быть **read-write**:

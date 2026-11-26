@@ -78,6 +78,7 @@ class GoogleCalendarAdapter(IServiceAdapter):
         self.timezone_name = timezone_name
         self.service = None
         self.sync_token: Optional[str] = None
+        self.last_auth_url: Optional[str] = None
 
     @property
     def is_authenticated(self) -> bool:
@@ -137,6 +138,7 @@ class GoogleCalendarAdapter(IServiceAdapter):
             # redirect_uri = None — и Google отклоняет запрос авторизации.
             flow.oauth2session.redirect_uri = "http://localhost:8080/"
             auth_url, state = flow.authorization_url(prompt="consent")
+            self.last_auth_url = auth_url
             
             print("\n" + "="*50)
             print("ПЕРЕЙДИ ПО ЭТОЙ ССЫЛКЕ В БРАУЗЕРЕ:")

@@ -90,6 +90,10 @@ class GoogleCalendarStatus(BaseModel):
     )
     last_sync_at: datetime | None = None
     message: str = ""
+    auth_url: str | None = Field(
+        default=None,
+        description="Ссылка на авторизацию (OAuth), если требуется подключение",
+    )
 
 
 class GoogleExportResult(BaseModel):
