@@ -61,6 +61,27 @@ def test_contract_task_extraction_accepts_several_files() -> None:
     assert contract["components"]["securitySchemes"]["bearerAuth"]["scheme"] == "bearer"
 
 
+def test_contract_contains_task_draft_feedback_batch() -> None:
+    contract = _load_contract()
+
+    path = contract["paths"]["/v1/tasks/extract/feedback"]["post"]
+    request_schema = path["requestBody"]["content"]["application/json"]["schema"]
+    assert request_schema["$ref"] == "#/components/schemas/TaskDraftFeedbackCreate"
+
+    schemas = contract["components"]["schemas"]
+    feedback_create = schemas["TaskDraftFeedbackCreate"]
+    assert feedback_create["required"] == ["items"]
+    items = feedback_create["properties"]["items"]
+    assert items["type"] == "array"
+    assert items["items"]["$ref"] == "#/components/schemas/TaskDraftFeedbackItem"
+
+    feedback = schemas["TaskDraftFeedback"]["properties"]
+    assert "batch_totals" in feedback
+    assert "accumulated_totals" in feedback
+    assert "calibrated" in feedback
+    assert "preferences" in feedback
+
+
 def test_contract_contains_reorder_feedback_endpoint() -> None:
     contract = _load_contract()
 

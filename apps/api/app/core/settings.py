@@ -30,6 +30,11 @@ class AppSettings(BaseModel):
     ml_overdue_bonus: float = Field(
         default=float(os.getenv("ML_OVERDUE_BONUS", "10")), ge=0, le=10000
     )
+    task_draft_feedback_strong_signal_threshold: int = Field(
+        default=int(os.getenv("TASK_DRAFT_FEEDBACK_STRONG_SIGNAL_THRESHOLD", "2")),
+        ge=1,
+        le=1000,
+    )
     database_url: str = os.getenv(
         "DATABASE_URL",
         "postgresql://postgres:postgres@localhost:5432/ai_assistant",

@@ -508,6 +508,13 @@ textarea.input {
   max-width: 48ch;
 }
 
+.modal-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
 .modal-close {
   flex: none;
   width: 34px;
@@ -703,6 +710,41 @@ textarea.input {
   display: grid;
   gap: 3px;
 }
+
+.extract-prompt {
+  display: grid;
+  gap: 8px;
+}
+
+.extract-prompt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.extract-prompt-title {
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.extract-prompt-text {
+  margin: 0;
+  padding: 12px 14px;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 
 .extract-navigation {
   display: flex;

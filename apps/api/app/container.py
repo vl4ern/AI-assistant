@@ -9,7 +9,9 @@ from app.modules.auth.service import AuthService
 from app.modules.integrations.integration.adapters.llama_server_client import (
     LlamaServerChatClient,
 )
+from app.modules.integrations.integration.cache_storage import SQLiteCacheStorage
 from app.modules.integrations.integration.task_extraction import TaskDraftExtractor
+from app.modules.integrations.integration.task_draft_feedback import TaskDraftFeedbackService
 from app.modules.integrations.service import IntegrationService
 from app.modules.intelligence.cp_sat_scheduler import CpSatScheduler
 from app.modules.intelligence.ml_scoring import MLScoringService
@@ -75,21 +77,44 @@ class Container:
         )
 
         self.task_draft_extractor: TaskDraftExtractor | None = None
+        self.task_draft_feedback_service: TaskDraftFeedbackService | None = None
         if settings.local_llm_enabled:
+            llm_client = LlamaServerChatClient(
+                base_url=settings.local_llm_base_url,
+                model=settings.local_llm_model,
+                api_key=settings.local_llm_api_key,
+                timeout_seconds=settings.local_llm_timeout_seconds,
+                disable_thinking=settings.local_llm_disable_thinking,
+            )
+            try:
+                # Настройки переживают перезапуск API: используем тот же
+                # SQLite, что и кэш интеграций.
+                feedback_storage = SQLiteCacheStorage(
+                    settings.integration_cache_path
+                )
+            except Exception:
+                # Если файл кэша недоступен, обратная связь продолжит
+                # работать в памяти процесса.
+                feedback_storage = None
+
+            self.task_draft_feedback_service = TaskDraftFeedbackService(
+                client=llm_client,
+                # На блок предпочтений хватает нескольких сотен токенов;
+                # не отдаём модели весь лимит распознавания.
+                adaptation_max_tokens=min(settings.local_llm_max_tokens, 512),
+                adaptation_temperature=min(settings.local_llm_temperature, 0.3),
+                strong_signal_threshold=settings.task_draft_feedback_strong_signal_threshold,
+                storage=feedback_storage,
+            )
             self.task_draft_extractor = TaskDraftExtractor(
-                client=LlamaServerChatClient(
-                    base_url=settings.local_llm_base_url,
-                    model=settings.local_llm_model,
-                    api_key=settings.local_llm_api_key,
-                    timeout_seconds=settings.local_llm_timeout_seconds,
-                    disable_thinking=settings.local_llm_disable_thinking,
-                ),
+                client=llm_client,
                 vision_enabled=settings.local_llm_vision_enabled,
                 max_text_bytes=settings.local_llm_max_text_kb * 1024,
                 max_image_bytes=settings.local_llm_max_image_mb * 1024 * 1024,
                 max_files=settings.local_llm_max_files,
                 max_tokens=settings.local_llm_max_tokens,
                 temperature=settings.local_llm_temperature,
+                feedback_service=self.task_draft_feedback_service,
             )
 
         self.integration_service = IntegrationService(
@@ -101,6 +126,7 @@ class Container:
             semester_start_date=settings.semester_start_date,
             iis_horizon_days=settings.iis_horizon_days,
             task_draft_extractor=self.task_draft_extractor,
+            task_draft_feedback_service=self.task_draft_feedback_service,
         )
 
         self._ensure_demo_user()

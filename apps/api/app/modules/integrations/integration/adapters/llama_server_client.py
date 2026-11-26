@@ -23,6 +23,7 @@ class LlmChatClient(Protocol):
         *,
         max_tokens: int,
         temperature: float,
+        response_format: dict[str, Any] | None = None,
     ) -> str:
         ...
 
@@ -65,6 +66,7 @@ class LlamaServerChatClient:
         *,
         max_tokens: int,
         temperature: float,
+        response_format: dict[str, Any] | None = None,
     ) -> str:
         payload: dict[str, Any] = {
             "model": self._model,
@@ -72,9 +74,12 @@ class LlamaServerChatClient:
             "max_tokens": max_tokens,
             "temperature": temperature,
             "stream": False,
-            # Грамматика llama-server не даёт модели вернуть markdown вокруг JSON.
-            "response_format": {"type": "json_object"},
         }
+
+        if response_format is not None:
+            # Передаём формат ответа явно: для тонкой настройки промпта
+            # нужен свободный текст, для распознавания — JSON.
+            payload["response_format"] = response_format
 
         if self._disable_thinking:
             # Gemma 4 поддерживает режим рассуждений: без этого флага модель

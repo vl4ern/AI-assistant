@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import { extractTaskDraft } from '../api/taskExtract';
+import {
+  extractTaskDraft,
+  getTaskDraftPrompt,
+  recordTaskDraftFeedbackBatch,
+  type TaskDraftFeedbackItem,
+} from '../api/taskExtract';
 import { useSettings } from '../settings';
 import { draftToTaskPayload, splitDraftDeadline } from '../taskDraft';
 import type { ApiTaskCreate, ApiTaskDraft, ApiTaskDrafts } from '../types/api';
@@ -64,6 +69,9 @@ export function TaskExtractPanel({ onCreate }: TaskExtractPanelProps) {
   const [isExtracting, setIsExtracting] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('preview');
+  const [showPrompt, setShowPrompt] = useState(false);
+  const [promptText, setPromptText] = useState('');
+  const [isLoadingPrompt, setIsLoadingPrompt] = useState(false);
 
   // Редактируемая копия текущего черновика (режим «исправить в форме»).
   const [editTitle, setEditTitle] = useState('');
@@ -75,6 +83,12 @@ export function TaskExtractPanel({ onCreate }: TaskExtractPanelProps) {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Обратная связь копится по всей пачке и уходит одним запросом после
+  // добавления последней задачи. Промис нужен, чтобы следующее распознавание
+  // дождалось калибровки промпта.
+  const pendingFeedbackRef = useRef<TaskDraftFeedbackItem[]>([]);
+  const feedbackPromiseRef = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     const currentFile = files[0];
@@ -104,6 +118,7 @@ export function TaskExtractPanel({ onCreate }: TaskExtractPanelProps) {
     setIsExtracting(false);
     setIsCreating(false);
     setViewMode('preview');
+    pendingFeedbackRef.current = [];
     resetEditState();
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -117,6 +132,34 @@ export function TaskExtractPanel({ onCreate }: TaskExtractPanelProps) {
     setEditEstimate('60');
     setEditDeadlineDate('');
     setEditDeadlineTime('');
+  }
+
+  function queueFeedback(item: TaskDraftFeedbackItem) {
+    pendingFeedbackRef.current = [...pendingFeedbackRef.current, item];
+  }
+
+  function flushFeedback(): Promise<void> {
+    if (pendingFeedbackRef.current.length === 0) {
+      return feedbackPromiseRef.current ?? Promise.resolve();
+    }
+
+    const items = pendingFeedbackRef.current;
+    pendingFeedbackRef.current = [];
+
+    // Если предыдущая калибровка ещё идёт, отправляем следующую пачку
+    // после неё, чтобы не потерять обновление промпта.
+    const previous = feedbackPromiseRef.current ?? Promise.resolve();
+    const request = previous
+      .catch(() => undefined)
+      .then(() => recordTaskDraftFeedbackBatch(items))
+      .then(() => undefined)
+      .catch((feedbackError) => {
+        // Ошибка обратной связи не должна ломать создание задач.
+        console.warn('Не удалось сохранить обратную связь по черновикам', feedbackError);
+      });
+
+    feedbackPromiseRef.current = request;
+    return request;
   }
 
   function openModal() {
@@ -163,6 +206,14 @@ export function TaskExtractPanel({ onCreate }: TaskExtractPanelProps) {
     setError('');
     setViewMode('preview');
     try {
+      // Если предыдущая пачка ещё калибрует промпт, дожидаемся её:
+      // иначе новое распознавание уйдёт со старыми предпочтениями.
+      if (feedbackPromiseRef.current) {
+        await feedbackPromiseRef.current;
+        feedbackPromiseRef.current = null;
+      }
+      pendingFeedbackRef.current = [];
+
       const result: ApiTaskDrafts = await extractTaskDraft(
         mode === 'text' ? text : '',
         mode === 'file' ? files : []
@@ -211,6 +262,9 @@ export function TaskExtractPanel({ onCreate }: TaskExtractPanelProps) {
     const nextDrafts = drafts.filter((_, i) => i !== currentIndex);
     setDrafts(nextDrafts);
     if (nextDrafts.length === 0) {
+      // Последняя задача пачки обработана (добавлена или пропущена):
+      // отправляем накопленную обратную связь одним запросом.
+      void flushFeedback();
       closeModal();
     } else {
       setCurrentIndex(Math.min(currentIndex, nextDrafts.length - 1));
@@ -242,10 +296,29 @@ export function TaskExtractPanel({ onCreate }: TaskExtractPanelProps) {
       project_id: draft.project_id,
     };
 
+    const userDraft: ApiTaskDraft = {
+      title: editTitle.trim(),
+      description: editDescription.trim() || null,
+      estimated_minutes: Number(editEstimate) || 60,
+      priority: Number(editPriority),
+      deadline,
+      workspace_id: draft.workspace_id,
+      project_id: draft.project_id,
+      input_kind: draft.input_kind,
+      warnings: draft.warnings,
+    };
+
     setIsCreating(true);
     setError('');
     try {
       await onCreate(payload);
+      // Запоминаем пару «модель → пользователь». Запрос уйдёт только
+      // после добавления последней задачи из пачки.
+      queueFeedback({
+        task_title: draft.title,
+        user_draft: userDraft,
+        llm_draft: draft,
+      });
       removeCurrentDraft();
     } catch (createError) {
       setError(
@@ -262,9 +335,22 @@ export function TaskExtractPanel({ onCreate }: TaskExtractPanelProps) {
     setError('');
     try {
       const tasksToAdd = [...drafts];
+      const feedbackItems: TaskDraftFeedbackItem[] = [];
       for (const draft of tasksToAdd) {
         await onCreate(draftToTaskPayload(draft));
+        // Черновик добавлен без правок — ошибка по нему будет нулевой,
+        // но он всё равно часть пачки.
+        feedbackItems.push({
+          task_title: draft.title,
+          user_draft: draft,
+          llm_draft: draft,
+        });
       }
+      pendingFeedbackRef.current = [
+        ...pendingFeedbackRef.current,
+        ...feedbackItems,
+      ];
+      void flushFeedback();
       closeModal();
     } catch (createError) {
       setError(
@@ -294,6 +380,28 @@ export function TaskExtractPanel({ onCreate }: TaskExtractPanelProps) {
     setViewMode('preview');
     resetEditState();
     setError('');
+  }
+
+  async function handleShowPrompt() {
+    if (showPrompt) {
+      setShowPrompt(false);
+      return;
+    }
+    setIsLoadingPrompt(true);
+    setError('');
+    try {
+      if (feedbackPromiseRef.current) {
+        await feedbackPromiseRef.current;
+        feedbackPromiseRef.current = null;
+      }
+      const result = await getTaskDraftPrompt();
+      setPromptText(result.prompt);
+      setShowPrompt(true);
+    } catch {
+      setError(t('tasks.extract.promptError'));
+    } finally {
+      setIsLoadingPrompt(false);
+    }
   }
 
   const currentDraft = getCurrentDraft();
@@ -336,15 +444,44 @@ export function TaskExtractPanel({ onCreate }: TaskExtractPanelProps) {
                   </h2>
                   <p className="modal-subtitle">{t('tasks.extract.subtitle')}</p>
                 </div>
-                <button
-                  type="button"
-                  className="modal-close"
-                  aria-label={t('tasks.extract.close')}
-                  onClick={closeModal}
-                >
-                  ×
-                </button>
+                <div className="modal-head-actions">
+                  <button
+                    type="button"
+                    className="button small"
+                    onClick={() => void handleShowPrompt()}
+                    disabled={isLoadingPrompt}
+                  >
+                    {isLoadingPrompt
+                      ? '…'
+                      : showPrompt
+                        ? t('tasks.extract.hidePrompt')
+                        : t('tasks.extract.showPrompt')}
+                  </button>
+                  <button
+                    type="button"
+                    className="modal-close"
+                    aria-label={t('tasks.extract.close')}
+                    onClick={closeModal}
+                  >
+                    ×
+                  </button>
+                </div>
               </div>
+
+              {showPrompt && (
+                <div className="extract-prompt">
+                  <div className="extract-prompt-head">
+                    <span className="extract-prompt-title">
+                      {t('tasks.extract.promptTitle')}
+                    </span>
+                  </div>
+                  {isLoadingPrompt ? (
+                    <div className="notice">{t('tasks.extract.recognizing')}</div>
+                  ) : (
+                    <pre className="extract-prompt-text">{promptText}</pre>
+                  )}
+                </div>
+              )}
 
               {currentDraft ? (
                 <div className="extract-draft">

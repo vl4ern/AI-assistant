@@ -29,12 +29,13 @@ class FakeChatClient:
         self.error = error
         self.calls: list[dict] = []
 
-    def chat(self, messages, *, max_tokens, temperature):
+    def chat(self, messages, *, max_tokens, temperature, response_format=None):
         self.calls.append(
             {
                 "messages": messages,
                 "max_tokens": max_tokens,
                 "temperature": temperature,
+                "response_format": response_format,
             }
         )
         if self.error is not None:
@@ -413,6 +414,7 @@ def test_llama_client_sends_json_mode_and_disables_thinking() -> None:
         [{"role": "user", "content": "Привет"}],
         max_tokens=128,
         temperature=0.1,
+        response_format={"type": "json_object"},
     )
 
     assert content == '{"title": "Задача"}'

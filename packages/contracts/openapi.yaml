@@ -131,6 +131,58 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /v1/tasks/extract/feedback:
+    post:
+      tags: [tasks]
+      summary: Record task draft feedback batch
+      description: >-
+        Запись обратной связи по всей пачке черновиков. Вызывается один раз
+        после добавления последней задачи из пачки. Для каждого черновика
+        сравниваются версия пользователя (user_draft) и версия локальной
+        модели (llm_draft). Ошибки по длительности, описанию и приоритету
+        суммируются; если |сумма| по критерию превышает порог, локальная LLM
+        обновляет только блок персональных предпочтений. Базовый системный
+        промпт не изменяется.
+      operationId: recordTaskDraftFeedback
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskDraftFeedbackCreate"
+      responses:
+        "200":
+          description: Feedback recorded and (maybe) prompt adapted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskDraftFeedback"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/tasks/extract/prompt:
+    get:
+      tags: [tasks]
+      summary: Get task draft system prompt
+      description: >-
+        Возвращает системный промпт локального распознавания задач для
+        текущего пользователя: базовый либо адаптированный через обратную
+        связь по черновикам.
+      operationId: getTaskDraftSystemPrompt
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: System prompt for task draft extraction
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskDraftSystemPrompt"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
   /v1/tasks/{task_id}/status:
     patch:
       tags: [tasks]
@@ -425,6 +477,122 @@ components:
           default: []
       required:
         - tasks
+
+    TaskDraftFeedbackItem:
+      type: object
+      description: >-
+        Одна пара «что предложила локальная модель / что оставил пользователь».
+      properties:
+        task_title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        user_draft:
+          $ref: "#/components/schemas/TaskDraft"
+        llm_draft:
+          $ref: "#/components/schemas/TaskDraft"
+      required:
+        - task_title
+        - user_draft
+        - llm_draft
+
+    TaskDraftFeedbackCreate:
+      type: object
+      description: >-
+        Запрос на запись обратной связи по всей пачке черновиков. Отправляется
+        один раз после добавления последней задачи из пачки.
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/TaskDraftFeedbackItem"
+      required:
+        - items
+
+    TaskDraftFeedbackItemResult:
+      type: object
+      description: Ошибки модели по одной задаче из пачки.
+      properties:
+        task_title:
+          type: string
+          maxLength: 200
+        criteria:
+          type: object
+          additionalProperties:
+            type: integer
+            minimum: -3
+            maximum: 3
+          description: >-
+            Критерий (duration / description / priority) -> ошибка модели.
+            Нулевые значения не включаются.
+      required:
+        - task_title
+        - criteria
+
+    TaskDraftFeedback:
+      type: object
+      description: >-
+        Результат обработки пачки обратной связи. `batch_totals` — сумма
+        ошибок только по этой пачке; `accumulated_totals` — накопленная сумма
+        после применения (без критериев, которые только что были
+        перекалиброваны). `calibrated` показывает, обновился ли персональный
+        блок предпочтений.
+      properties:
+        user_id:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/TaskDraftFeedbackItemResult"
+        batch_totals:
+          type: object
+          additionalProperties:
+            type: integer
+        accumulated_totals:
+          type: object
+          additionalProperties:
+            type: integer
+        exceeded_criteria:
+          type: array
+          items:
+            type: string
+            enum: [duration, description, priority]
+        calibrated:
+          type: boolean
+          default: false
+        preferences:
+          anyOf:
+            - type: string
+            - type: "null"
+          description: Актуальный блок персональных предпочтений.
+        calibration_error:
+          anyOf:
+            - type: string
+            - type: "null"
+          description: Причина неудачной калибровки (если была попытка).
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - user_id
+        - items
+        - batch_totals
+        - accumulated_totals
+        - exceeded_criteria
+        - calibrated
+
+    TaskDraftSystemPrompt:
+      type: object
+      description: >-
+        Системный промпт распознавания задач для конкретного пользователя.
+      properties:
+        prompt:
+          type: string
+          description: Текст системного промпта.
+      required:
+        - prompt
 
     TaskStatus:
       type: string

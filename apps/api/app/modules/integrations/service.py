@@ -15,12 +15,18 @@ from app.modules.integrations.integration.task_extraction import (
     TaskExtractFile,
     TaskExtractionError,
 )
+from app.modules.integrations.integration.task_draft_feedback import (
+    TaskDraftFeedbackService,
+)
 from app.modules.integrations.integration.retry_queue import RetryQueue
 from app.modules.integrations.integration.sync_scheduler import SyncScheduler
 from app.modules.integrations.models import (
     IntegrationAdapterStatus,
     IntegrationSyncResult,
     Lesson,
+    TaskDraftFeedback,
+    TaskDraftFeedbackItem,
+    TaskDraftSystemPrompt,
     TaskDrafts,
     WeekInfo,
 )
@@ -88,10 +94,12 @@ class IntegrationService:
         semester_start_date: str = "",
         iis_horizon_days: int = 28,
         task_draft_extractor: TaskDraftExtractor | None = None,
+        task_draft_feedback_service: TaskDraftFeedbackService | None = None,
     ) -> None:
         self._semester_start = self._parse_semester_start(semester_start_date)
         self._horizon_days = iis_horizon_days
         self._task_draft_extractor = task_draft_extractor
+        self._task_draft_feedback_service = task_draft_feedback_service
 
         cache = SQLiteCacheStorage(cache_path)
 
@@ -433,6 +441,7 @@ class IntegrationService:
         *,
         text: str = "",
         files: list[TaskExtractFile] | None = None,
+        user_id: str | None = None,
     ) -> TaskDrafts:
         """
         Распознаёт черновики задач из текста и файлов локальной моделью.
@@ -443,6 +452,9 @@ class IntegrationService:
         Модель сама определяет, что из материала следует одна задача
         (ответ — один черновик) или несколько независимых задач
         (ответ — несколько черновиков).
+
+        `user_id` нужен, чтобы применить к системному промпту персональный
+        блок предпочтений, накопленный по обратной связи этого пользователя.
         """
         if self._task_draft_extractor is None:
             raise TaskExtractionError(
@@ -452,7 +464,55 @@ class IntegrationService:
         return self._task_draft_extractor.extract(
             text=text,
             files=files,
+            user_id=user_id,
         )
+
+    def record_task_draft_feedback(
+        self,
+        *,
+        user_id: str,
+        items: list[TaskDraftFeedbackItem],
+    ) -> TaskDraftFeedback:
+        """
+        Фиксирует обратную связь по всей пачке черновиков.
+
+        Вызывается один раз после того, как пользователь добавил последнюю
+        задачу из пачки. Сравнивает версии (LLM vs пользователь), суммирует
+        ошибки модели по критериям (длительность, описание, приоритет) и,
+        если |сумма| по критерию превысила порог, перекалибровывает
+        персональный блок системного промпта через локальную LLM.
+
+        Возвращает результат обработки пачки.
+        """
+        if self._task_draft_feedback_service is None:
+            raise TaskExtractionError(
+                "Сервис обратной связи по черновикам не настроен.",
+                status_code=503,
+            )
+        return self._task_draft_feedback_service.record_batch(
+            user_id=user_id,
+            items=items,
+            now=datetime.now().astimezone(),
+        )
+
+    def get_task_draft_system_prompt(self, user_id: str) -> TaskDraftSystemPrompt:
+        """
+        Возвращает системный промпт для распознавания задач конкретного
+        пользователя: базовый либо адаптированный через feedback loop.
+
+        Используется фронтендом: кнопка «показать системный промт» в окне
+        распознавания задач.
+        """
+        if self._task_draft_feedback_service is None:
+            raise TaskExtractionError(
+                "Сервис обратной связи по черновикам не настроен.",
+                status_code=503,
+            )
+        prompt = self._task_draft_feedback_service.get_system_prompt(
+            user_id=user_id,
+            now=datetime.now().astimezone(),
+        )
+        return TaskDraftSystemPrompt(prompt=prompt)
 
     def sync_group(self, group_number: str) -> IntegrationSyncResult:
         """
