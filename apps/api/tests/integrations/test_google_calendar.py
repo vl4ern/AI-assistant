@@ -1,8 +1,11 @@
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from app.modules.integrations.integration.adapters.google_calendar_adapter import (
     GoogleCalendarAdapter,
+    _OAuthCallbackApp,
 )
 from app.modules.integrations.models.google_models import GoogleCalendarEvent
 from app.modules.integrations.models.task import SourceType, Task, TaskStatus
@@ -125,6 +128,72 @@ def test_authenticate_non_interactive_without_token_returns_false(tmp_path: Path
 
     assert adapter.authenticate(interactive=False) is False
     assert adapter.is_authenticated is False
+
+
+def _callback_environ(query: str) -> dict:
+    return {
+        "REQUEST_METHOD": "GET",
+        "wsgi.url_scheme": "http",
+        "HTTP_HOST": "localhost",
+        "PATH_INFO": "/",
+        "QUERY_STRING": query,
+    }
+
+
+def _callback_start_response(status: str, headers: list) -> None:
+    return None
+
+
+def _run_callback(app: _OAuthCallbackApp, query: str) -> bytes:
+    body = app(environ=_callback_environ(query), start_response=_callback_start_response)
+    return b"".join(body)
+
+
+def test_oauth_callback_accepts_matching_state_and_code() -> None:
+    app = _OAuthCallbackApp(flow=object(), state="state-123")
+
+    assert _run_callback(app, "code=abc&state=state-123") == b"ok"
+    assert app.uri == "http://localhost/?code=abc&state=state-123"
+    assert app.error is None
+
+
+def test_oauth_callback_rejects_mismatching_state() -> None:
+    app = _OAuthCallbackApp(flow=object(), state="state-123")
+
+    assert _run_callback(app, "code=abc&state=evil") == b"invalid_request"
+    assert app.error == "invalid_request"
+    assert app.uri is None
+
+
+def test_oauth_callback_rejects_oauth_error_param() -> None:
+    app = _OAuthCallbackApp(flow=object(), state="state-123")
+
+    assert _run_callback(app, "error=access_denied") == b"error=oauth_error:access_denied"
+    assert app.error is not None
+    assert app.uri is None
+
+
+def test_oauth_callback_second_request_is_rejected() -> None:
+    app = _OAuthCallbackApp(flow=object(), state="state-123")
+
+    assert _run_callback(app, "code=abc&state=state-123") == b"ok"
+    assert _run_callback(app, "code=abc&state=state-123") == b"bad_request"
+    assert app.uri == "http://localhost/?code=abc&state=state-123"
+
+
+def test_local_callback_server_releases_port_after_timeout() -> None:
+    adapter = GoogleCalendarAdapter(
+        credentials_file="/nonexistent/credentials.json",
+        token_file="/tmp/nonexistent-token.pickle",
+    )
+
+    with pytest.raises(TimeoutError):
+        adapter._run_local_callback_server(
+            flow=object(),
+            state="state-123",
+            port=0,
+            timeout_seconds=1.0,
+        )
 
 
 def test_export_updates_existing_event_instead_of_duplicating(tmp_path: Path) -> None:

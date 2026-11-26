@@ -1,9 +1,14 @@
 import os
 import pickle
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
+from wsgiref import simple_server
+from wsgiref.simple_server import WSGIRequestHandler, WSGIServer
+from wsgiref.util import request_uri
 
 from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
@@ -17,6 +22,44 @@ from app.modules.integrations.models.task import Task
 # readonly не подходит: адаптер ещё и пишет события (экспорт плана).
 # calendar.events — минимальный scope для чтения и записи событий.
 SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
+
+
+class _OAuthCallbackApp:
+    """WSGI-приложение локального сервера OAuth redirect.
+
+    Принимает только корректный callback: параметры `code` и `state`
+    должны совпасть с сгенерированными в процессе авторизации. Иначе
+    считается неуспешным завершением и запрос просто отклоняется — без
+    «успешной» страницы для произвольного GET.
+    """
+
+    def __init__(self, flow: InstalledAppFlow, state: str) -> None:
+        self.flow = flow
+        self.state = state
+        self.uri: Optional[str] = None
+        self.error: Optional[str] = None
+        self.done = False
+
+    def _respond(self, start_response, body: bytes, status: str) -> List[bytes]:
+        start_response(status, [("Content-type", "text/plain; charset=utf-8")])
+        return [body]
+
+    def __call__(self, environ, start_response):  # noqa: ANN001, ANN202
+        if self.done:
+            return self._respond(start_response, b"bad_request", "400 Bad Request")
+        uri = request_uri(environ)
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(uri).query)
+        if "error" in query:
+            self.error = f"oauth_error:{query['error'][0]}"
+            self.done = True
+            return self._respond(start_response, f"error={self.error}".encode("utf-8"), "200 OK")
+        if "code" not in query or query.get("state", [None])[0] != self.state:
+            self.error = "invalid_request"
+            self.done = True
+            return self._respond(start_response, b"invalid_request", "400 Bad Request")
+        self.uri = uri
+        self.done = True
+        return self._respond(start_response, b"ok", "200 OK")
 
 
 class GoogleCalendarAdapter(IServiceAdapter):
@@ -89,25 +132,60 @@ class GoogleCalendarAdapter(IServiceAdapter):
             flow = InstalledAppFlow.from_client_secrets_file(
                 self.credentials_file, SCOPES
             )
-            auth_url, _ = flow.authorization_url(prompt="consent")
+            auth_url, state = flow.authorization_url(prompt="consent")
             
             print("\n" + "="*50)
             print("ПЕРЕЙДИ ПО ЭТОЙ ССЫЛКЕ В БРАУЗЕРЕ:")
             print(auth_url)
             print("="*50 + "\n")
 
-            creds = flow.run_local_server(
-                port=8080,  # Фиксированный порт для проброса
-                bind_addr="0.0.0.0",  # Слушать на всех интерфейсах внутри контейнера
-                open_browser=False,
-                prompt="consent",
-            )
+            creds = self._run_local_callback_server(flow=flow, state=state, port=8080)
 
         with open(self.token_file, "wb") as f:
             pickle.dump(creds, f)
 
         self.service = build("calendar", "v3", credentials=creds, cache_discovery=False)
         return True
+
+    def _run_local_callback_server(
+        self,
+        flow: InstalledAppFlow,
+        state: str,
+        port: int = 8080,
+        timeout_seconds: float = 300.0,
+    ) -> Credentials:
+        """
+        Запускает локальный callback-сервер OAuth-потока.
+
+        - сервер слушает `0.0.0.0:{port}` (в Docker порт публикуется наружу);
+        - ожидание ограничено `timeout_seconds` — после таймаута сервер
+          закрывается и порт освобождается;
+        - callback обрабатывается только при корректном `state`/`code`;
+        - после ответа сервер обязательно закрывается (на порт не остаётся
+          «зависший» процесс, иначе повторные попытки дают EADDRINUSE).
+        """
+        callback_app = _OAuthCallbackApp(flow, state)
+
+        server = simple_server.make_server(
+            "0.0.0.0",
+            port,
+            callback_app,
+            server_class=WSGIServer,
+            handler_class=WSGIRequestHandler,
+        )
+        server.timeout = timeout_seconds
+        try:
+            server.handle_request()
+        finally:
+            server.server_close()
+
+        if callback_app.error is not None:
+            raise ValueError(f"OAuth-авторизация не удалась: {callback_app.error}")
+        if callback_app.uri is None:
+            raise TimeoutError("Время ожидания ответа от Google истекло")
+
+        authorization_response = callback_app.uri.replace("http", "https")
+        return flow.fetch_token(authorization_response=authorization_response)
 
     # ---------- чтение ----------
 
