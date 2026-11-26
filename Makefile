@@ -5,7 +5,7 @@ export
 
 API_PORT ?= 8000
 
-.PHONY: api-install api-dev api-test models llm-dev web-install web-dev web-lint up logs compose-up compose-down up-gpu down-gpu compose-up-gpu compose-down-gpu detect-gpu
+.PHONY: api-install api-dev api-test models llm-dev web-install web-dev web-lint up logs compose-up compose-down up-gpu down-gpu compose-up-gpu compose-down-gpu detect-gpu google-clean google-clean-docker
 
 api-install:
 	python3 -m venv .venv && ./.venv/bin/pip install -r apps/api/requirements-dev.txt
@@ -15,6 +15,13 @@ api-dev:
 
 api-test:
 	PYTHONPATH=apps/api ./.venv/bin/pytest apps/api/tests -q
+
+# Полная чистка всех данных, импортированных из Google Calendar.
+google-clean:
+	PYTHONPATH=apps/api ./.venv/bin/python apps/api/clear_google_data.py
+
+google-clean-docker:
+	docker compose exec api python clear_google_data.py
 
 models:
 	./scripts/download-models.sh

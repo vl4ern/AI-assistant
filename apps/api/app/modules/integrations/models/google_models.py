@@ -1,26 +1,18 @@
-import os
-from datetime import datetime, timedelta, timezone, tzinfo
+from datetime import datetime, tzinfo
 from typing import List, Optional
 
+from app.core.time_utils import app_timezone
 from app.modules.integrations.models.task import SourceType, Task, TaskStatus
 
 # Метка, которой помечаются события, созданные самим ассистентом
 # (экспорт плана). При чтении календаря такие события пропускаются,
 # иначе запланированные слоты вернулись бы обратно как «занятое время».
 EXPORT_MARKER_KEY = "ai_assistant"
-
-_DEFAULT_TZ_NAME = "Europe/Minsk"
-
+EXPORT_DESCRIPTION = "Запланировано в AI-assistant"
 
 def get_local_tz() -> tzinfo:
     """Локальный часовой пояс приложения (GOOGLE_TIMEZONE, по умолчанию Минск)."""
-    name = os.getenv("GOOGLE_TIMEZONE", _DEFAULT_TZ_NAME)
-    try:
-        from zoneinfo import ZoneInfo
-
-        return ZoneInfo(name)
-    except Exception:  # noqa: BLE001 — нет tzdata в окружении
-        return timezone(timedelta(hours=3))
+    return app_timezone()
 
 
 def to_local_naive(value: datetime) -> datetime:
@@ -52,12 +44,23 @@ class GoogleCalendarEvent:
         if not event_id:
             return None
 
-        private_props = event.get("extendedProperties", {}).get("private", {})
-        if private_props.get(EXPORT_MARKER_KEY):
+        # Отменённые/удалённые события не импортируем — это не задачи и не
+        # мероприятия, а мусорные занятые интервалы.
+        if event.get("status") == "cancelled":
+            return None
+
+        extended = event.get("extendedProperties") or {}
+        private_props = extended.get("private") or {}
+        public_props = extended.get("public") or {}
+        if EXPORT_MARKER_KEY in private_props or EXPORT_MARKER_KEY in public_props:
             return None
 
         summary = event.get("summary", "Без названия")
-        description = event.get("description", "")
+        description = event.get("description", "") or ""
+        # Дополнительная страховка для событий, у которых метку потеряли
+        # (например, старый экспорт до введения extendedProperties).
+        if EXPORT_DESCRIPTION in description:
+            return None
 
         start = event.get("start", {})
         end = event.get("end", {})

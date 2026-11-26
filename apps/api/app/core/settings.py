@@ -8,6 +8,27 @@ from pydantic import BaseModel, Field
 load_dotenv()
 
 
+def _resolve_secret_path(value: str) -> str:
+    """Найти OAuth-файл и при локальном запуске из корня репозитория.
+
+    В Docker пути абсолютные (``/google_token/...``) либо файл лежит прямо
+    в WORKDIR. Локально креды и токен лежат в ``secrets/`` — раньше это
+    приводило к «не найден credentials.json» и потере авторизации.
+    """
+    if os.path.isabs(value) or os.path.exists(value):
+        return value
+    name = os.path.basename(value)
+    candidates = (
+        os.path.join("secrets", value),
+        os.path.join("secrets", name),
+        os.path.join("secrets", os.path.splitext(name)[0], name),
+    )
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return value
+
+
 class AppSettings(BaseModel):
     app_name: str = "AI Assistant API"
     app_version: str = "0.1.0"
@@ -47,8 +68,12 @@ class AppSettings(BaseModel):
     }
     iis_group_number: str = os.getenv("IIS_GROUP_NUMBER", "")
     integration_cache_path: str = os.getenv("INTEGRATION_CACHE_PATH", "data/integration_cache.db")
-    google_credentials_file: str = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
-    google_token_file: str = os.getenv("GOOGLE_TOKEN_FILE", "google_token.pickle")
+    google_credentials_file: str = _resolve_secret_path(
+        os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+    )
+    google_token_file: str = _resolve_secret_path(
+        os.getenv("GOOGLE_TOKEN_FILE", "google_token.pickle")
+    )
     integrations_background_sync_enabled: bool = os.getenv(
         "INTEGRATIONS_BACKGROUND_SYNC_ENABLED", "true"
     ).lower() in {"1", "true", "yes", "on"}

@@ -52,6 +52,11 @@ class KnowledgeRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def delete_events_by_source(self, source: str) -> int:
+        """Удалить все события указанного источника. Возвращает число строк."""
+        raise NotImplementedError
+
+    @abstractmethod
     def create_user(
         self,
         username: str,

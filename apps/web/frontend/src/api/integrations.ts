@@ -93,6 +93,7 @@ export type GoogleCalendarStatus = {
   last_sync_at: string | null;
   message: string;
   auth_url: string | null;
+  auth_error: string | null;
 };
 
 export type GoogleExportResult = {
@@ -113,9 +114,25 @@ export function connectGoogle(): Promise<GoogleCalendarStatus> {
   });
 }
 
-// Импорт: подтянуть события из Google Calendar в приложение.
+// Удалить из Google календаря копии, созданные экспортом плана.
+export function clearGoogleCalendar(): Promise<{ deleted: number }> {
+  return apiRequest<{ deleted: number }>('/v1/integrations/google/clear-calendar', {
+    method: 'POST',
+  });
+}
+
+// Отключение: удалить токен и заново пройти OAuth с чистого листа.
+export function disconnectGoogle(): Promise<GoogleCalendarStatus> {
+  return apiRequest<GoogleCalendarStatus>('/v1/integrations/google/disconnect', {
+    method: 'POST',
+  });
+}
+
+// Импорт: подтянуть события из Google Calendar в личные данные пользователя.
 export function importFromGoogle(): Promise<IntegrationSyncResult> {
-  return syncIntegration('GoogleCalendar');
+  return apiRequest<IntegrationSyncResult>('/v1/integrations/google/import', {
+    method: 'POST',
+  });
 }
 
 // Экспорт: перестроить план и перенести слоты в Google Calendar.

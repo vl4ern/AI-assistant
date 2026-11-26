@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import threading
+import time as time_module
 from datetime import date, datetime, time, timedelta
 
 from app.modules.integrations.integration.cache_storage import SQLiteCacheStorage
@@ -33,6 +35,7 @@ from app.modules.integrations.models import (
     WeekInfo,
 )
 from app.modules.integrations.models.google_models import (
+    EXPORT_DESCRIPTION,
     get_local_tz,
     to_local_naive,
 )
@@ -42,7 +45,6 @@ from app.modules.integrations.models.task import SourceType, Task
 from app.modules.knowledge.service import KnowledgeService
 
 IIS_SYNC_INTERVAL_SECONDS = 7200
-GOOGLE_CALENDAR_SYNC_INTERVAL_SECONDS = 900
 
 # Маркер «настройка группы ещё никогда не записывалась»: отличается от
 # пустой строки, которой группа сбрасывается при импорте без группы.
@@ -104,8 +106,11 @@ class IntegrationService:
     ) -> None:
         self._semester_start = self._parse_semester_start(semester_start_date)
         self._horizon_days = iis_horizon_days
+        self._knowledge_service = knowledge_service
         self._google_credentials_file = google_credentials_file
         self._google_adapter = None
+        self._oauth_lock = threading.Lock()
+        self._oauth_in_progress = False
         self._task_draft_extractor = task_draft_extractor
         self._task_draft_feedback_service = task_draft_feedback_service
 
@@ -127,11 +132,40 @@ class IntegrationService:
             kb_client=KnowledgeIngestClient(knowledge_service),
         )
 
+        # Разовая уборка: удаляем все события, пришедшие из Google (в том
+        # числе те, что когда-то были экспортированы из приложения и вернулись
+        # обратно), а также их следы в кэше. Следующий импорт создаст только
+        # настоящие Google-события с правильным владельцем.
+        if cache.get_setting("google_full_purge_v3", "") != "1":
+            self.purge_google_data()
+            cache.set_setting("google_full_purge_v3", "1")
+
         self._register_adapters(
             iis_group_number=iis_group_number,
             google_credentials_file=google_credentials_file,
             google_token_file=google_token_file,
         )
+
+    def purge_google_data(self) -> tuple[int, int]:
+        """Удалить всё, что когда-либо пришло из Google Calendar.
+
+        Чистит и базу знаний (события), и кэш синхронизации. Возвращает
+        количество удалённых записей: (события, задачи кэша).
+        """
+        cache = self._scheduler.cache
+        delete_cached = getattr(cache, "delete_tasks_by_source", None)
+        cached_removed = delete_cached("google_calendar") if delete_cached else 0
+        events_removed = self._knowledge_service.delete_events_by_source(
+            "google-calendar"
+        )
+
+        # Метки экспорта ссылаются на события Google — тоже убираем.
+        delete_setting = getattr(cache, "delete_setting", None)
+        list_settings = getattr(cache, "list_settings", None)
+        if delete_setting and list_settings:
+            for key in list_settings("google_export:"):
+                delete_setting(key)
+        return events_removed, cached_removed
 
     @staticmethod
     def _parse_semester_start(value: str) -> date:
@@ -188,91 +222,165 @@ class IntegrationService:
     def _register_google_adapter(self) -> None:
         if self._google_adapter is None or "GoogleCalendar" in self._scheduler.adapters:
             return
+        # Интервал 0 = не синхронизировать фоново: без пользователя некому
+        # указать владельца импортируемых событий.
         self._scheduler.register_adapter(
-            "GoogleCalendar",
-            self._google_adapter,
-            sync_interval=GOOGLE_CALENDAR_SYNC_INTERVAL_SECONDS,
+            "GoogleCalendar", self._google_adapter, sync_interval=0
         )
 
     def google_status(self) -> GoogleCalendarStatus:
-        configured = self._google_adapter is not None
-        connected = bool(configured and self._google_adapter.is_authenticated)
+        adapter = self._google_adapter
+        configured = adapter is not None
+        connected = bool(configured and adapter.is_authenticated)
         last_sync = self._scheduler.last_sync_time.get("GoogleCalendar")
+        auth_error = getattr(adapter, "last_auth_error", None) if adapter else None
+
         if not configured:
             message = (
                 "Не найден файл credentials.json — укажите GOOGLE_CREDENTIALS_FILE "
                 "(OAuth-ключ типа «Desktop app» из Google Cloud Console)."
             )
-        elif not connected:
-            message = "Google Calendar не подключён — нажмите «Подключить»."
-        else:
+        elif connected:
             message = "Google Calendar подключён."
+        elif auth_error:
+            message = f"Google Calendar: {auth_error}"
+        elif self._oauth_in_progress:
+            message = "Google Calendar: ожидание авторизации…"
+        else:
+            message = "Google Calendar не подключён — нажмите «Подключить»."
+
         status = GoogleCalendarStatus(
             configured=configured,
             connected=connected,
             last_sync_at=(last_sync if last_sync and last_sync != datetime.min else None),
             message=message,
+            auth_error=auth_error,
         )
-        if configured and not connected and self._google_adapter is not None:
-            status.auth_url = self._google_adapter.last_auth_url
+        if configured and not connected and adapter is not None:
+            status.auth_url = adapter.last_auth_url
         return status
 
-    def connect_google(self) -> GoogleCalendarStatus:
+    def connect_google(self, user_id: str | None = None) -> GoogleCalendarStatus:
         """
-        Запускает интерактивную OAuth-авторизацию в фоновом потоке и
-        немедленно возвращает статус с `auth_url` — ссылкой для
-        автоматического открытия в браузере (фронтенд через window.open).
+        Запускает OAuth-авторизацию в фоновом потоке и сразу возвращает
+        статус с `auth_url` для открытия окна входа в браузере пользователя.
 
-        Блокирующий интерактивный поток (локальный callback server + ожидание
-        ответа Google) ограничен таймаутом внутри адаптера; поток продолжает
-        выполняться в фоне, пока пользователь проходит согласие в браузере.
+        Флоу защищено от параллельных запусков: повторное нажатие не поднимает
+        второй callback-сервер на том же порту. Ошибки фона попадают в статус
+        (`auth_error`), чтобы фронтенд мог показать их сразу, а не ждать
+        таймаута polling'а.
         """
-        if self._google_adapter is None:
+        adapter = self._google_adapter
+        if adapter is None:
             raise ValueError(self.google_status().message)
 
-        if self._google_adapter.is_authenticated:
+        if adapter.is_authenticated:
             # Токен уже есть — повторные нажатия «Подключить» не должны
             # запускать новый OAuth-флоу.
             return self.google_status()
 
-        import time
-        from concurrent.futures import ThreadPoolExecutor
+        with self._oauth_lock:
+            if self._oauth_in_progress:
+                status = self.google_status()
+                status.message = "Google Calendar: ожидание авторизации…"
+                status.auth_url = adapter.last_auth_url
+                return status
+            self._oauth_in_progress = True
 
-        executor = ThreadPoolExecutor(max_workers=1)
+        # Ссылка от предыдущей (уже завершённой/упавшей) попытки содержит
+        # старый state — открывать её бессмысленно и опасно.
+        adapter.last_auth_url = None
+        adapter.last_auth_error = None
 
-        def _authorize() -> bool:
+        def _authorize() -> None:
             try:
-                authenticated = self._google_adapter.authenticate(interactive=True)
+                authenticated = adapter.authenticate(interactive=True)
+                if authenticated:
+                    self._register_google_adapter()
+                    # Сразу подтягиваем события: после согласия пользователь
+                    # должен увидеть их в календаре/плане без лишнего клика.
+                    try:
+                        result = self._scheduler.sync_adapter_now(
+                            "GoogleCalendar", user_id=user_id
+                        )
+                        if result and result.errors:
+                            adapter.last_auth_error = "; ".join(result.errors)
+                    except Exception as exc:  # noqa: BLE001
+                        adapter.last_auth_error = f"ошибка импорта: {exc}"
             except Exception as exc:  # noqa: BLE001
+                adapter.last_auth_error = str(exc)
                 print(f"[Integrations] Google OAuth background flow failed: {exc}")
-                raise
-            if authenticated:
-                self._register_google_adapter()
-            return authenticated
+            finally:
+                with self._oauth_lock:
+                    self._oauth_in_progress = False
 
-        executor.submit(_authorize)
-        executor.shutdown(wait=False)
+        threading.Thread(
+            target=_authorize, name="google-oauth", daemon=True
+        ).start()
 
-        auth_url = None
-        deadline = time.monotonic() + 30.0
-        while time.monotonic() < deadline:
-            candidate = (
-                self._google_adapter.last_auth_url
-                if self._google_adapter is not None
-                else None
-            )
-            if candidate:
-                auth_url = candidate
+        deadline = time_module.monotonic() + 30.0
+        while time_module.monotonic() < deadline:
+            if adapter.last_auth_url or adapter.last_auth_error:
                 break
-            time.sleep(0.05)
+            time_module.sleep(0.05)
 
-        status = GoogleCalendarStatus(
-            configured=True,
-            connected=False,
-            message="Google Calendar: ожидание авторизации…",
-        )
-        status.auth_url = auth_url
-        return status
+        return self.google_status()
+
+    def disconnect_google(self) -> GoogleCalendarStatus:
+        """
+        Полностью отключает Google Calendar: удаляет токен, снимает адаптер
+        с фоновой синхронизации и очищает привязки экспортированных событий.
+
+        После этого кнопка «Подключить» снова запускает OAuth с нуля — можно
+        войти в другой аккаунт или заново выдать разрешения.
+        """
+        if self._oauth_in_progress:
+            raise ValueError("Идёт авторизация Google — дождитесь её завершения")
+
+        adapter = self._google_adapter
+        if adapter is not None:
+            adapter.service = None
+            adapter.sync_token = None
+            adapter.last_auth_url = None
+            adapter.last_auth_error = None
+
+        for key in ("GoogleCalendar",):
+            self._scheduler.adapters.pop(key, None)
+            self._scheduler.intervals.pop(key, None)
+            self._scheduler.last_sync_time.pop(key, None)
+
+        if adapter is not None:
+            try:
+                if os.path.exists(adapter.token_file):
+                    os.remove(adapter.token_file)
+            except OSError as exc:
+                raise ValueError(
+                    f"Не удалось удалить токен {adapter.token_file}: {exc}"
+                ) from exc
+
+        # Идентификаторы событий от старого аккаунта не должны использоваться
+        # для обновления событий после повторного подключения.
+        cache = self._scheduler.cache
+        delete_setting = getattr(cache, "delete_setting", None)
+        list_settings = getattr(cache, "list_settings", None)
+        if delete_setting is not None and list_settings is not None:
+            try:
+                for key in list_settings("google_export:"):
+                    delete_setting(key)
+            except Exception:  # noqa: BLE001 — кэш не должен ломать отключение
+                pass
+
+        return self.google_status()
+
+    def clear_google_calendar(self) -> int:
+        """Удалить из Google Calendar все события, созданные экспортом плана."""
+        adapter = self._google_adapter
+        if adapter is None or not adapter.is_authenticated:
+            raise ValueError("Google Calendar не подключён")
+        delete_exported = getattr(adapter, "delete_exported_events", None)
+        if delete_exported is None:
+            raise ValueError("Адаптер Google Calendar не поддерживает очистку")
+        return delete_exported()
 
     def export_slots_to_google(self, slots: list) -> GoogleExportResult:
         """
@@ -300,7 +408,7 @@ class IntegrationService:
                 external_id=known_event_id,
                 source_type=SourceType.MANUAL,
                 title=slot.title,
-                description="Запланировано в AI-assistant",
+                description=EXPORT_DESCRIPTION,
                 due_date=start,
                 duration_minutes=max(int((end - start).total_seconds() // 60), 15),
             )
@@ -439,16 +547,24 @@ class IntegrationService:
         )
 
     def sync_all(self) -> IntegrationSyncResult:
-        result = self._scheduler.sync_all()
+        # Google — личный источник: его импортирует только пользователь через
+        # /v1/integrations/google/import, чтобы не создавать общие записи.
+        result = self._scheduler.sync_all(exclude={"GoogleCalendar"})
         self._purge_past_occurrences()
         self._reconcile_stale_occurrences(set(result.seen_external_ids))
         return self._to_sync_result("all", result)
 
-    def sync_adapter(self, adapter_name: str) -> IntegrationSyncResult:
+    def sync_adapter(
+        self, adapter_name: str, user_id: str | None = None
+    ) -> IntegrationSyncResult:
         if adapter_name not in self._scheduler.adapters:
             raise ValueError(f"Adapter '{adapter_name}' not found")
+        if adapter_name == "GoogleCalendar" and not user_id:
+            raise ValueError(
+                "Импорт Google Calendar доступен только авторизованному пользователю"
+            )
 
-        result = self._scheduler.sync_adapter_now(adapter_name)
+        result = self._scheduler.sync_adapter_now(adapter_name, user_id=user_id)
         if result is None:
             raise ValueError(f"Adapter '{adapter_name}' not found")
 

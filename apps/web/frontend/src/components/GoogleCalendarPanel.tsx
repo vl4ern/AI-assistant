@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import {
+  clearGoogleCalendar,
   connectGoogle,
+  disconnectGoogle,
   exportPlanToGoogle,
   getGoogleStatus,
   importFromGoogle,
@@ -14,21 +16,39 @@ type GoogleCalendarPanelProps = {
   onChanged: () => void;
 };
 
+const POLL_INTERVAL_MS = 2000;
+const MAX_POLL_ATTEMPTS = 150; // 5 минут — как таймаут OAuth-сервера на backend
+
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return 'Unknown error';
 }
 
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export function GoogleCalendarPanel({ onChanged }: GoogleCalendarPanelProps) {
   const { t, locale } = useSettings();
   const [status, setStatus] = useState<GoogleCalendarStatus | null>(null);
-  const [busy, setBusy] = useState<'connect' | 'import' | 'export' | null>(null);
+  const [busy, setBusy] = useState<
+    'connect' | 'import' | 'export' | 'disconnect' | 'clear' | null
+  >(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [authUrl, setAuthUrl] = useState<string | null>(null);
+  const [popupBlocked, setPopupBlocked] = useState(false);
 
   const loadStatus = useCallback(async () => {
     try {
-      setStatus(await getGoogleStatus());
+      const current = await getGoogleStatus();
+      setStatus(current);
+      if (current.connected) {
+        setAuthUrl(null);
+        setPopupBlocked(false);
+      } else {
+        setAuthUrl(current.auth_url);
+      }
     } catch (loadError) {
       setError(getErrorMessage(loadError));
     }
@@ -38,41 +58,85 @@ export function GoogleCalendarPanel({ onChanged }: GoogleCalendarPanelProps) {
     void loadStatus();
   }, [loadStatus]);
 
-  async function run(kind: 'connect' | 'import' | 'export') {
+  async function run(
+    kind: 'connect' | 'import' | 'export' | 'disconnect' | 'clear'
+  ) {
     setBusy(kind);
     setMessage('');
     setError('');
     try {
       if (kind === 'connect') {
-        const newStatus = await connectGoogle();
-        let status = newStatus;
-        setStatus(status);
-        if (status.auth_url && !status.connected) {
-          // Автоматически открываем ссылку авторизации в новой вкладке.
-          // window.open после await может попасть под блокировку всплывающих
-          // окон (user-gesture lost) — поэтому используем fallback через ссылку.
-          const opened = window.open(status.auth_url, '_blank', 'noopener,noreferrer');
-          if (!opened) {
-            const anchor = document.createElement('a');
-            anchor.href = status.auth_url;
-            anchor.target = '_blank';
-            anchor.rel = 'noopener';
-            document.body.appendChild(anchor);
-            anchor.click();
-            anchor.remove();
+        // Открываем окно синхронно, пока ещё жив жест пользователя: после
+        // await window.open почти наверняка будет заблокирован браузером.
+        const popup = window.open('about:blank', '_blank');
+        setPopupBlocked(!popup);
+
+        let current = await connectGoogle();
+        setStatus(current);
+        setAuthUrl(current.auth_url);
+
+        if (current.auth_error) {
+          setError(t('google.authFailed', { error: current.auth_error }));
+          popup?.close();
+          return;
+        }
+
+        if (current.auth_url) {
+          if (popup && !popup.closed) {
+            popup.location.assign(current.auth_url);
+            popup.focus();
+          } else {
+            // Окно заблокировано — внизу покажем кликабельную ссылку.
+            setPopupBlocked(true);
           }
-          // Ждём завершения OAuth-флоу в фоне — обновляем статус.
-          for (let attempt = 0; attempt < 40; attempt++) {
-            await new Promise((resolve) => setTimeout(resolve, 3000));
-            status = await getGoogleStatus();
-            setStatus(status);
-            if (status.connected) break;
+        } else if (current.connected) {
+          popup?.close();
+        }
+
+        // Ждём завершения OAuth в фоне; при успехе обновляем данные сразу.
+        for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
+          await wait(POLL_INTERVAL_MS);
+          current = await getGoogleStatus();
+          setStatus(current);
+          if (current.auth_error && !current.connected) {
+            setError(t('google.authFailed', { error: current.auth_error }));
+            break;
+          }
+          if (popup && popup.closed && !current.connected) {
+            // Окно закрыли, не завершив вход — даём нажать кнопку снова.
+            break;
+          }
+          if (current.connected) {
+            setAuthUrl(null);
+            setPopupBlocked(false);
+            setMessage(t('google.connected'));
+            onChanged();
+            break;
           }
         }
-        setMessage(status.connected ? t('google.connected') : t('google.notConnected'));
+        // «Не подключён» уже написано в карточке — не дублируем.
       } else if (kind === 'import') {
         const result = await importFromGoogle();
-        setMessage(t('google.imported', { count: result.synced_items }));
+        if (result.status === 'error' || result.errors.length > 0) {
+          setError(
+            t('google.importFailed', {
+              error: result.errors.join('; ') || result.message,
+            })
+          );
+        } else {
+          setMessage(t('google.imported', { count: result.synced_items }));
+        }
+        onChanged();
+      } else if (kind === 'clear') {
+        const result = await clearGoogleCalendar();
+        setMessage(t('google.cleared', { count: result.deleted }));
+        onChanged();
+      } else if (kind === 'disconnect') {
+        const current = await disconnectGoogle();
+        setStatus(current);
+        setAuthUrl(null);
+        setPopupBlocked(false);
+        setMessage(t('google.disconnected'));
         onChanged();
       } else {
         const result = await exportPlanToGoogle();
@@ -138,10 +202,34 @@ export function GoogleCalendarPanel({ onChanged }: GoogleCalendarPanelProps) {
               >
                 {busy === 'export' ? t('google.exporting') : t('google.export')}
               </button>
+              <button
+                className="button small"
+                disabled={busy !== null}
+                onClick={() => void run('clear')}
+              >
+                {busy === 'clear' ? t('google.clearing') : t('google.clear')}
+              </button>
+              <button
+                className="button small"
+                disabled={busy !== null}
+                onClick={() => void run('disconnect')}
+              >
+                {busy === 'disconnect'
+                  ? t('google.disconnecting')
+                  : t('google.disconnect')}
+              </button>
             </>
           )}
         </div>
       </div>
+      {busy === 'connect' && authUrl && !status?.connected && (
+        <p className="card-note">
+          {popupBlocked && <span>{t('google.popupBlocked')} </span>}
+          <a href={authUrl} target="_blank" rel="noopener noreferrer">
+            {t('google.authLink')}
+          </a>
+        </p>
+      )}
       {message && <p className="card-note">{message}</p>}
       {error && <p className="card-note google-panel-error">{error}</p>}
     </div>

@@ -345,8 +345,10 @@ paths:
   /v1/integrations/google/connect:
     post:
       tags: [integrations]
-      summary: Authorize Google Calendar (OAuth, browser opens on the backend machine)
+      summary: Start Google Calendar OAuth and return the URL to open in the browser
       operationId: connectGoogle
+      security:
+        - bearerAuth: []
       responses:
         "200":
           description: Updated status
@@ -356,6 +358,78 @@ paths:
                 $ref: "#/components/schemas/GoogleCalendarStatus"
         "400":
           description: Not configured or authorization failed
+
+  /v1/integrations/google/purge:
+    post:
+      tags: [integrations]
+      summary: Delete every Google Calendar item ever imported (maintenance)
+      operationId: purgeGoogleData
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Number of deleted events and cached tasks
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events_deleted:
+                    type: integer
+                  cached_tasks_deleted:
+                    type: integer
+
+  /v1/integrations/google/clear-calendar:
+    post:
+      tags: [integrations]
+      summary: Delete app-exported copies of schedule and tasks from Google Calendar
+      operationId: clearGoogleCalendar
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Number of deleted events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: integer
+
+  /v1/integrations/google/import:
+    post:
+      tags: [integrations]
+      summary: Import Google Calendar events into the current user's data
+      operationId: importGoogleEvents
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Import result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntegrationSyncResult"
+        "400":
+          description: Google Calendar is not connected
+
+  /v1/integrations/google/disconnect:
+    post:
+      tags: [integrations]
+      summary: Disconnect Google Calendar (delete token and start OAuth from scratch next time)
+      operationId: disconnectGoogle
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Updated status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoogleCalendarStatus"
+        "400":
+          description: Authorization in progress or token could not be removed
 
   /v1/integrations/google/export:
     post:
@@ -909,6 +983,10 @@ components:
           type: string
           nullable: true
           description: Ссылка на авторизацию (OAuth), если требуется подключение
+        auth_error:
+          type: string
+          nullable: true
+          description: Ошибка фоновой авторизации/импорта Google
       required:
         - configured
         - connected

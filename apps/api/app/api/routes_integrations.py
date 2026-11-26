@@ -78,15 +78,54 @@ def google_status() -> GoogleCalendarStatus:
 
 
 @router.post("/google/connect", response_model=GoogleCalendarStatus)
-def google_connect() -> GoogleCalendarStatus:
+def google_connect(user: UserPublic = Depends(get_current_user)) -> GoogleCalendarStatus:
     """
-    Авторизация в Google (OAuth). Браузер откроется на машине с backend.
-    Запрос блокируется до завершения авторизации.
+    Запуск авторизации Google (OAuth) в фоне. В ответе — auth_url, который
+    фронтенд открывает в окне браузера пользователя; завершение видно в
+    статусе через GET /google/status. События после входа импортируются
+    как личные данные этого пользователя.
     """
     try:
-        return container.integration_service.connect_google()
+        return container.integration_service.connect_google(user.id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/google/purge")
+def google_purge(user: UserPublic = Depends(get_current_user)) -> dict:
+    """Удалить все данные, когда-либо импортированные из Google Calendar."""
+    events, tasks = container.integration_service.purge_google_data()
+    return {"events_deleted": events, "cached_tasks_deleted": tasks}
+
+
+@router.post("/google/import", response_model=IntegrationSyncResult)
+def google_import(user: UserPublic = Depends(get_current_user)) -> IntegrationSyncResult:
+    """Импорт событий Google Calendar в личные данные пользователя."""
+    try:
+        return container.integration_service.sync_adapter("GoogleCalendar", user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/google/disconnect", response_model=GoogleCalendarStatus)
+def google_disconnect(
+    user: UserPublic = Depends(get_current_user),
+) -> GoogleCalendarStatus:
+    """Отключить Google: удалить токен и разрешения, чтобы войти заново."""
+    try:
+        return container.integration_service.disconnect_google()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/google/clear-calendar")
+def google_clear_calendar(user: UserPublic = Depends(get_current_user)) -> dict:
+    """Удалить из Google календаря копии расписания/задач, созданные экспортом."""
+    try:
+        deleted = container.integration_service.clear_google_calendar()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"deleted": deleted}
 
 
 @router.post("/google/export", response_model=GoogleExportResult)
@@ -106,6 +145,11 @@ def sync_all_integrations() -> IntegrationSyncResult:
 
 @router.post("/{provider_name}/sync", response_model=IntegrationSyncResult)
 def sync_provider(provider_name: str) -> IntegrationSyncResult:
+    if provider_name == "GoogleCalendar":
+        raise HTTPException(
+            status_code=400,
+            detail="Используйте POST /v1/integrations/google/import (нужен вход в аккаунт)",
+        )
     try:
         return container.integration_service.sync_adapter(provider_name)
     except ValueError as exc:

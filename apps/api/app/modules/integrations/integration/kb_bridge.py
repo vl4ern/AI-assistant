@@ -1,10 +1,11 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
 
+from app.core.time_utils import to_utc
 from app.modules.integrations.integration.sync_scheduler import SyncScheduler
 from app.modules.integrations.models.sync import ConflictNotification, SyncResult
 from app.modules.integrations.models.task import Task
-from app.modules.knowledge.models import EventCreate, TaskCreate
+from app.modules.knowledge.models import SHARED_USER_ID, EventCreate, TaskCreate
 from app.modules.knowledge.service import KnowledgeService
 
 DEFAULT_EVENT_DURATION_MINUTES = 90
@@ -67,11 +68,17 @@ class KnowledgeIngestClient:
 
         source = SOURCE_TO_EVENT_SOURCE.get(fact.get("source"), fact.get("source") or "manual")
         title = fact.get("title") or "Событие внешнего календаря"
-        key = (source, title, _normalize_key_datetime(start))
+        user_id = fact.get("user_id") or SHARED_USER_ID
+        key = (user_id, source, title, _normalize_key_datetime(start))
 
         if self._event_keys is None:
             self._event_keys = {
-                (event.source, event.title, _normalize_key_datetime(event.start_at))
+                (
+                    event.user_id,
+                    event.source,
+                    event.title,
+                    _normalize_key_datetime(event.start_at),
+                )
                 for event in self._kb.list_events()
             }
 
@@ -87,6 +94,7 @@ class KnowledgeIngestClient:
                 start_at=start,
                 end_at=end,
                 source=source,
+                user_id=user_id,
             )
         )
         self._event_keys.add(key)
@@ -94,11 +102,16 @@ class KnowledgeIngestClient:
 
     def _upsert_task(self, fact: dict, deadline: Optional[datetime]) -> None:
         title = fact.get("title") or "Задача из внешнего сервиса"
-        key = (title, _normalize_key_datetime(deadline) if deadline else None)
+        user_id = fact.get("user_id") or SHARED_USER_ID
+        key = (user_id, title, _normalize_key_datetime(deadline) if deadline else None)
 
         if self._task_keys is None:
             self._task_keys = {
-                (task.title, _normalize_key_datetime(task.deadline) if task.deadline else None)
+                (
+                    task.user_id,
+                    task.title,
+                    _normalize_key_datetime(task.deadline) if task.deadline else None,
+                )
                 for task in self._kb.list_tasks()
             }
 
@@ -113,6 +126,7 @@ class KnowledgeIngestClient:
                 priority=min(4, max(1, fact.get("priority") or 3)),
                 deadline=deadline,
                 project_id=fact.get("project_id") or None,
+                user_id=user_id,
             )
         )
         self._task_keys.add(key)
@@ -152,14 +166,18 @@ class KnowledgeBaseBridge:
         self.scheduler.subscribe("conflict_detected", self.on_conflict_detected)
         print("[KBBridge] Подписки на события активированы")
 
-    def on_task_created(self, task: Task):
+    def on_task_created(self, task: Task, user_id: str | None = None):
         """Новая задача создана в кэше"""
         kb_fact = self._task_to_kb_fact(task, action="created")
+        kb_fact["user_id"] = user_id
         self._send_to_kb(kb_fact)
 
-    def on_task_updated(self, task: Task, old_task: Task):
+    def on_task_updated(
+        self, task: Task, old_task: Task, user_id: str | None = None
+    ):
         """Задача обновлена"""
         kb_fact = self._task_to_kb_fact(task, action="updated")
+        kb_fact["user_id"] = user_id
         kb_fact["changes"] = self._detect_changes(old_task, task)
         self._send_to_kb(kb_fact)
 
@@ -312,7 +330,10 @@ def _parse_datetime(value: Optional[str]) -> Optional[datetime]:
 
 
 def _normalize_key_datetime(value: datetime) -> datetime:
-    """Приведение datetime к naive UTC для стабильных ключей дедупликации."""
-    if value.tzinfo is None:
-        return value
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
+    """Приведение datetime к naive UTC для стабильных ключей дедупликации.
+
+    Факты из внешних адаптеров приходят как naive-время пояса приложения,
+    а события уже из БД — как aware UTC. Без явной локализации один и тот
+    же момент дал бы два разных ключа и привёл к дубликатам при импорте.
+    """
+    return to_utc(value).astimezone(timezone.utc).replace(tzinfo=None)

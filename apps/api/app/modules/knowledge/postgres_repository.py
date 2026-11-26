@@ -5,6 +5,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from app.core.time_utils import to_utc
 from app.modules.auth.models import User
 
 from .models import Event, EventCreate, Task, TaskCreate, TaskStatus
@@ -158,7 +159,7 @@ class PostgresKnowledgeRepository(KnowledgeRepository):
                     item.description,
                     item.estimated_minutes,
                     item.priority,
-                    item.deadline,
+                    to_utc(item.deadline),
                     item.workspace_id,
                     item.project_id,
                     item.auto_reschedule,
@@ -167,8 +168,8 @@ class PostgresKnowledgeRepository(KnowledgeRepository):
                     item.status,
                     item.created_at,
                     item.updated_at,
-                    item.scheduled_start,
-                    item.scheduled_end,
+                    to_utc(item.scheduled_start),
+                    to_utc(item.scheduled_end),
                     item.user_id,
                 ),
             )
@@ -211,7 +212,7 @@ class PostgresKnowledgeRepository(KnowledgeRepository):
         """
         updated_at = datetime.now(timezone.utc)
         with self._connect() as conn, conn.cursor() as cur:
-            cur.execute(query, (start_at, end_at, updated_at, task_id))
+            cur.execute(query, (to_utc(start_at), to_utc(end_at), updated_at, task_id))
             row = cur.fetchone()
             conn.commit()
         if row is None:
@@ -252,12 +253,30 @@ class PostgresKnowledgeRepository(KnowledgeRepository):
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 query,
-                (item.id, item.title, item.start_at, item.end_at, item.source, item.user_id),
+                (
+                    item.id,
+                    item.title,
+                    to_utc(item.start_at),
+                    to_utc(item.end_at),
+                    item.source,
+                    item.user_id,
+                ),
             )
             conn.commit()
         with self._lock:
             self._schedule_dirty = True
         return item
+
+    def delete_events_by_source(self, source: str) -> int:
+        query = "DELETE FROM events WHERE source = %s"
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(query, (source,))
+            removed = cur.rowcount
+            conn.commit()
+        if removed:
+            with self._lock:
+                self._schedule_dirty = True
+        return removed
 
     def create_user(
         self,

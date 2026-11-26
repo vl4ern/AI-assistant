@@ -4,6 +4,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from app.core.settings import settings
+from app.core.time_utils import app_timezone
 from app.modules.auth.models import User
 from app.modules.auth.service import AuthService
 from app.modules.integrations.integration.adapters.llama_server_client import (
@@ -151,11 +152,14 @@ class Container:
 
         now = datetime.now(timezone.utc)
 
+        # Демо-событие задаём локальным naive-временем — репозиторий сам
+        # корректно переведёт его в UTC по поясу приложения.
+        local_day = now.astimezone(app_timezone()).replace(tzinfo=None)
         self.knowledge_service.create_event(
             EventCreate(
                 title="Лекции",
-                start_at=now.replace(hour=10, minute=0, second=0, microsecond=0),
-                end_at=now.replace(hour=13, minute=0, second=0, microsecond=0),
+                start_at=local_day.replace(hour=10, minute=0, second=0, microsecond=0),
+                end_at=local_day.replace(hour=13, minute=0, second=0, microsecond=0),
                 source="bsuir-lms",
                 user_id=DEMO_USER_ID,
             )

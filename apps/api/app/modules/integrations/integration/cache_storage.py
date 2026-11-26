@@ -64,6 +64,17 @@ class SQLiteCacheStorage(ICacheStorage):
                 (key, value),
             )
 
+    def delete_setting(self, key: str) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+
+    def list_settings(self, prefix: str = "") -> list[str]:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT key FROM settings WHERE key LIKE ?", (prefix + "%",)
+            )
+            return [row[0] for row in cursor.fetchall()]
+
     def get_task(self, task_id: str) -> Optional[Task]:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute("SELECT data FROM tasks WHERE id = ?", (task_id,))
@@ -122,6 +133,14 @@ class SQLiteCacheStorage(ICacheStorage):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         return True
+
+    def delete_tasks_by_source(self, source_type: str) -> int:
+        """Удалить из кэша все задачи указанного источника (например, Google)."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "DELETE FROM tasks WHERE source_type = ?", (source_type,)
+            )
+            return cursor.rowcount
 
     def delete_tasks_before(self, cutoff: datetime) -> int:
         """Удаляет задачи с датой раньше cutoff. Возвращает число удалённых."""

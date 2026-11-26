@@ -399,6 +399,7 @@ function AppInner() {
           <CalendarPage
             lessons={lessons}
             tasks={tasks}
+            events={events}
             weekInfo={weekInfo}
             onGoogleChanged={() => void refreshData()}
           />
@@ -1219,11 +1220,13 @@ function academicWeekOf(dateISO: string, semesterStartISO: string | null | undef
 function CalendarPage({
   lessons,
   tasks,
+  events,
   weekInfo,
   onGoogleChanged,
 }: {
   lessons: Lesson[];
   tasks: ApiTask[];
+  events: ApiEvent[];
   weekInfo: WeekInfo | null;
   onGoogleChanged: () => void;
 }) {
@@ -1258,6 +1261,20 @@ function CalendarPage({
 
     const plannedByDate = new Map<string, ApiTask[]>();
     const deadlinesByDate = new Map<string, ApiTask[]>();
+    const eventsByDate = new Map<string, ApiEvent[]>();
+    const otherEventsByDate = new Map<string, ApiEvent[]>();
+    for (const event of events) {
+      const key = event.start_at.slice(0, 10);
+      if (!key) continue;
+      // Секция «События Google» должна показывать только события Google.
+      // Занятия БГУИР уже показаны отдельно из /v1/integrations/lessons,
+      // а ручные занятые интервалы попадают в «Прочие события».
+      if (event.source === 'bsuir-lms') continue; // уже есть в «Университет»
+      const target =
+        event.source === 'google-calendar' ? eventsByDate : otherEventsByDate;
+      if (!target.has(key)) target.set(key, []);
+      target.get(key)!.push(event);
+    }
     for (const task of tasks) {
       if (task.status === 'cancelled') continue;
       if (task.scheduled_start) {
@@ -1271,8 +1288,14 @@ function CalendarPage({
         deadlinesByDate.get(key)!.push(task);
       }
     }
-    return { lessonsByDate, plannedByDate, deadlinesByDate };
-  }, [lessons, tasks]);
+    return {
+      lessonsByDate,
+      plannedByDate,
+      deadlinesByDate,
+      eventsByDate,
+      otherEventsByDate,
+    };
+  }, [lessons, tasks, events]);
 
   const monthTitle = monthCursor.toLocaleDateString(locale, {
     month: 'long',
@@ -1286,6 +1309,8 @@ function CalendarPage({
         lessons: byDate.lessonsByDate.get(selectedDate) ?? [],
         planned: byDate.plannedByDate.get(selectedDate) ?? [],
         deadlines: byDate.deadlinesByDate.get(selectedDate) ?? [],
+        events: byDate.eventsByDate.get(selectedDate) ?? [],
+        otherEvents: byDate.otherEventsByDate.get(selectedDate) ?? [],
       }
     : null;
 
@@ -1330,6 +1355,8 @@ function CalendarPage({
           const dayLessons = byDate.lessonsByDate.get(isoLocal) ?? [];
           const dayPlanned = byDate.plannedByDate.get(isoLocal) ?? [];
           const dayDeadlines = byDate.deadlinesByDate.get(isoLocal) ?? [];
+          const dayEvents = byDate.eventsByDate.get(isoLocal) ?? [];
+          const dayOtherEvents = byDate.otherEventsByDate.get(isoLocal) ?? [];
 
           return (
             <button
@@ -1339,7 +1366,14 @@ function CalendarPage({
                 outside ? 'outside' : '',
                 isoLocal === todayISO ? 'today' : '',
                 selectedDate === isoLocal ? 'selected' : '',
-                dayLessons.length + dayPlanned.length + dayDeadlines.length > 0 ? 'has-items' : '',
+                dayLessons.length +
+                  dayPlanned.length +
+                  dayDeadlines.length +
+                  dayEvents.length +
+                  dayOtherEvents.length >
+                0
+                  ? 'has-items'
+                  : '',
               ].filter(Boolean).join(' ')}
               onClick={() => setSelectedDate(selectedDate === isoLocal ? null : isoLocal)}
             >
@@ -1350,7 +1384,11 @@ function CalendarPage({
                 <span className="cal-day-num">{day.getDate()}</span>
               </span>
 
-              {(dayLessons.length > 0 || dayPlanned.length > 0 || dayDeadlines.length > 0) && (
+              {(dayLessons.length > 0 ||
+                dayPlanned.length > 0 ||
+                dayDeadlines.length > 0 ||
+                dayEvents.length > 0 ||
+                dayOtherEvents.length > 0) && (
                 <span className="cal-summary">
                   {dayLessons.length > 0 && (
                     <span>
@@ -1367,9 +1405,23 @@ function CalendarPage({
                       {t('calendar.deadlinesShort', { count: dayDeadlines.length })}
                     </span>
                   )}
+                  {dayEvents.length > 0 && (
+                    <span>{t('calendar.googleEvents')}: {dayEvents.length}</span>
+                  )}
+                  {dayOtherEvents.length > 0 && (
+                    <span>{t('calendar.otherEvents')}: {dayOtherEvents.length}</span>
+                  )}
                 </span>
               )}
-              {dayLessons.length > 0 && <span className="cal-hint">{dayLessons[0].subject}</span>}
+              {dayLessons.length > 0 ? (
+                <span className="cal-hint">{dayLessons[0].subject}</span>
+              ) : dayEvents.length > 0 ? (
+                <span className="cal-hint">{dayEvents[0].title}</span>
+              ) : (
+                dayOtherEvents.length > 0 && (
+                  <span className="cal-hint">{dayOtherEvents[0].title}</span>
+                )
+              )}
             </button>
           );
         })}
@@ -1442,6 +1494,48 @@ function CalendarPage({
                       <strong>{task.title}</strong>
                       <span className="task-meta">
                         {formatClock(task.deadline, locale)}
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="cal-section">
+            <h4 className="cal-section-title">{t('calendar.googleEvents')}</h4>
+            {selected.events.length === 0 ? (
+              <span className="cal-section-empty">{t('calendar.noGoogleEvents')}</span>
+            ) : (
+              <ul className="event-list">
+                {selected.events.map((event) => (
+                  <li key={event.id} className="event-row">
+                    <div>
+                      <strong>{event.title}</strong>
+                      <span className="task-meta">
+                        {formatClock(event.start_at, locale)} —{' '}
+                        {formatClock(event.end_at, locale)}
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="cal-section">
+            <h4 className="cal-section-title">{t('calendar.otherEvents')}</h4>
+            {selected.otherEvents.length === 0 ? (
+              <span className="cal-section-empty">{t('calendar.noOtherEvents')}</span>
+            ) : (
+              <ul className="event-list">
+                {selected.otherEvents.map((event) => (
+                  <li key={event.id} className="event-row">
+                    <div>
+                      <strong>{event.title}</strong>
+                      <span className="task-meta">
+                        {formatClock(event.start_at, locale)} —{' '}
+                        {formatClock(event.end_at, locale)}
                       </span>
                     </div>
                   </li>

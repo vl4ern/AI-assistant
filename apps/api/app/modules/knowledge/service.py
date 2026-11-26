@@ -110,6 +110,10 @@ class KnowledgeService:
         validate_event_knowledge(payload)
         return self._repository.create_event(payload)
 
+    def delete_events_by_source(self, source: str) -> int:
+        """Удалить все события указанного источника (например, google-calendar)."""
+        return self._repository.delete_events_by_source(source)
+
     def is_schedule_dirty(self) -> bool:
         """
         Return whether the schedule should be recalculated.

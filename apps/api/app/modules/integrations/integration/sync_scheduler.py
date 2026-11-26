@@ -100,11 +100,14 @@ class SyncScheduler:
             f"[SyncScheduler] Зарегистрирован адаптер '{name}' (интервал: {sync_interval}с)"
         )
 
-    def sync_all(self) -> SyncResult:
+    def sync_all(self, exclude: set[str] | None = None) -> SyncResult:
         """Запуск синхронизации для всех зарегистрированных адаптеров"""
         result = SyncResult()
+        exclude = exclude or set()
 
         for name, adapter in self.adapters.items():
+            if name in exclude:
+                continue
             try:
                 self._emit_event("sync_started", {"adapter_name": name})
                 self._sync_adapter(name, adapter, result)
@@ -123,15 +126,21 @@ class SyncScheduler:
 
         return result
 
-    def sync_adapter_now(self, name: str) -> Optional[SyncResult]:
-        """Принудительная синхронизация одного адаптера"""
+    def sync_adapter_now(
+        self, name: str, user_id: str | None = None
+    ) -> Optional[SyncResult]:
+        """Принудительная синхронизация одного адаптера.
+
+        user_id нужен для личных источников (Google Calendar): их данные
+        должны попадать в базу знаний с владельцем, а не как общие.
+        """
         adapter = self.adapters.get(name)
         if not adapter:
             return None
 
         result = SyncResult()
         try:
-            self._sync_adapter(name, adapter, result)
+            self._sync_adapter(name, adapter, result, user_id=user_id)
         except Exception as e:
             result.errors.append(f"{name}: {str(e)}")
             result.success = False
@@ -139,7 +148,13 @@ class SyncScheduler:
         self.last_sync_time[name] = datetime.now()
         return result
 
-    def _sync_adapter(self, name: str, adapter: IServiceAdapter, result: SyncResult):
+    def _sync_adapter(
+        self,
+        name: str,
+        adapter: IServiceAdapter,
+        result: SyncResult,
+        user_id: str | None = None,
+    ):
         """Синхронизация одного адаптера с генерацией событий"""
         since = self.last_sync_time.get(name)
 
@@ -156,7 +171,9 @@ class SyncScheduler:
                 # Новая задача
                 if self.cache.save_task(remote_task):
                     result.tasks_synced += 1
-                    self._emit_event("task_created", {"task": remote_task})
+                    self._emit_event(
+                        "task_created", {"task": remote_task, "user_id": user_id}
+                    )
             else:
                 # Возможен конфликт
                 old_version = local_task.version
@@ -172,7 +189,12 @@ class SyncScheduler:
                     if resolved.version != old_version or len(conflicts) > 0:
                         # Задача действительно изменилась
                         self._emit_event(
-                            "task_updated", {"task": resolved, "old_task": local_task}
+                            "task_updated",
+                            {
+                                "task": resolved,
+                                "old_task": local_task,
+                                "user_id": user_id,
+                            },
                         )
 
     def _cleanup_deleted_tasks(self, adapter_name: str, remote_tasks: List[Task]):
@@ -227,6 +249,10 @@ class SyncScheduler:
             for name, adapter in self.adapters.items():
                 last_sync = self.last_sync_time.get(name, datetime.min)
                 interval = self.intervals.get(name, 3600)
+                if interval <= 0:
+                    # Личный источник (Google) импортируется только вручную,
+                    # от имени конкретного пользователя.
+                    continue
 
                 # Проверяем, пора ли синхронизировать
                 if (now - last_sync).total_seconds() >= interval:

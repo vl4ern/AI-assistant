@@ -79,6 +79,15 @@ class InMemoryKnowledgeRepository(KnowledgeRepository):
             self._schedule_dirty = True
             return item
 
+    def delete_events_by_source(self, source: str) -> int:
+        with self._lock:
+            ids = [key for key, value in self._events.items() if value.source == source]
+            for key in ids:
+                del self._events[key]
+            if ids:
+                self._schedule_dirty = True
+            return len(ids)
+
     def create_user(
         self,
         username: str,

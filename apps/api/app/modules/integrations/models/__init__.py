@@ -94,6 +94,10 @@ class GoogleCalendarStatus(BaseModel):
         default=None,
         description="Ссылка на авторизацию (OAuth), если требуется подключение",
     )
+    auth_error: str | None = Field(
+        default=None,
+        description="Ошибка фоновой авторизации/импорта Google (если была)",
+    )
 
 
 class GoogleExportResult(BaseModel):
