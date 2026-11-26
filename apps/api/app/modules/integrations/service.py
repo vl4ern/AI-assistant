@@ -230,6 +230,11 @@ class IntegrationService:
         if self._google_adapter is None:
             raise ValueError(self.google_status().message)
 
+        if self._google_adapter.is_authenticated:
+            # Токен уже есть — повторные нажатия «Подключить» не должны
+            # запускать новый OAuth-флоу.
+            return self.google_status()
+
         import time
         from concurrent.futures import ThreadPoolExecutor
 

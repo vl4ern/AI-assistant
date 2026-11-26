@@ -1,5 +1,6 @@
 import os
 import pickle
+import threading
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
@@ -79,6 +80,7 @@ class GoogleCalendarAdapter(IServiceAdapter):
         self.service = None
         self.sync_token: Optional[str] = None
         self.last_auth_url: Optional[str] = None
+        self._flow_lock = threading.Lock()
 
     @property
     def is_authenticated(self) -> bool:
@@ -172,18 +174,21 @@ class GoogleCalendarAdapter(IServiceAdapter):
         """
         callback_app = _OAuthCallbackApp(flow, state)
 
-        server = simple_server.make_server(
-            "0.0.0.0",
-            port,
-            callback_app,
-            server_class=WSGIServer,
-            handler_class=WSGIRequestHandler,
-        )
-        server.timeout = timeout_seconds
-        try:
-            server.handle_request()
-        finally:
-            server.server_close()
+        # Несколько параллельных OAuth-флоу на одном порту не должны
+        # конфликтовать — второй ждёт, пока первый отпустит порт.
+        with self._flow_lock:
+            server = simple_server.make_server(
+                "0.0.0.0",
+                port,
+                callback_app,
+                server_class=WSGIServer,
+                handler_class=WSGIRequestHandler,
+            )
+            server.timeout = timeout_seconds
+            try:
+                server.handle_request()
+            finally:
+                server.server_close()
 
         if callback_app.error is not None:
             raise ValueError(f"OAuth-авторизация не удалась: {callback_app.error}")
