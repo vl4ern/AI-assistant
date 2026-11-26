@@ -8,17 +8,13 @@ from app.modules.intelligence.models import SchedulePlan, ScheduledSlot
 from app.modules.knowledge.models import Event, Task
 from app.modules.intelligence.utils.time_utils import build_working_windows
 
-class GreedyScheduler:
-    """
-    Жадный планировщик задач.
 
-    Размещает задачи в свободных временных окнах в порядке убывания их скорингового балла.
-    Учитывает:
-    - запрещённые интервалы (события календаря и несдвигаемые задачи)
-    - время бодрствования пользователя
-    - дедлайны задач
-    - зависимости между задачами
-    - возможность дробления задач на части
+class SchedulerBase:
+    """
+    Общая база планировщиков.
+
+    Хранит настройки горизонта и рабочих часов, а также умеет строить
+    свободные окна: рабочие часы минус события и несдвигаемые задачи.
 
     Параметры конструктора:
         slot_minutes: минимальный размер одной ячейки планирования (в минутах).
@@ -41,6 +37,93 @@ class GreedyScheduler:
         self.wake_start_hour = wake_start_hour
         self.wake_end_hour = wake_end_hour
 
+    def _find_free_windows(
+        self,
+        start_at: datetime,
+        end_at: datetime,
+        busy_intervals: list[tuple[datetime, datetime]],
+    ) -> list[tuple[datetime, datetime]]:
+        """
+        Основной метод поиска свободных временных окон.
+        1. Строим все рабочие (бодрствующие) периоды внутри [start_at, end_at].
+        2. Вычитаем из них занятые интервалы (busy_intervals).
+        3. Возвращаем только те окна, где длина > 0.
+        """
+        working_windows = build_working_windows(start_at, end_at, self.wake_start_hour, self.wake_end_hour)
+        busy = self._normalize_intervals(busy_intervals)
+
+        free_windows = working_windows
+        for busy_start, busy_end in busy:
+            free_windows = self._subtract_interval(free_windows, busy_start, busy_end)
+
+        return [window for window in free_windows if window[1] > window[0]]
+
+    @staticmethod
+    def _normalize_intervals(
+        intervals: list[tuple[datetime | None, datetime | None]],
+    ) -> list[tuple[datetime, datetime]]:
+        """
+        Приводит список интервалов к UTC, отбрасывает некорректные (None или конец раньше начала).
+        Сортирует по времени начала.
+        """
+        normalized: list[tuple[datetime, datetime]] = []
+        for start_at, end_at in intervals:
+            if start_at is None or end_at is None or end_at <= start_at:
+                continue
+            normalized.append((SchedulerBase._to_utc(start_at), SchedulerBase._to_utc(end_at)))
+        normalized.sort(key=lambda interval: interval[0])
+        return normalized
+
+    @staticmethod
+    def _subtract_interval(
+        windows: list[tuple[datetime, datetime]],
+        busy_start: datetime,
+        busy_end: datetime,
+    ) -> list[tuple[datetime, datetime]]:
+        """
+        Вырезает занятый интервал из списка свободных окон.
+        Если занятый интервал пересекается с окном, окно разрезается на две части (до и после занятого).
+        """
+        result: list[tuple[datetime, datetime]] = []
+
+        for window_start, window_end in windows:
+            if busy_end <= window_start or busy_start >= window_end:
+                result.append((window_start, window_end))
+                continue
+
+            if busy_start > window_start:
+                result.append((window_start, busy_start))
+            if busy_end < window_end:
+                result.append((busy_end, window_end))
+
+        return result
+
+    def _round_up_to_slot(self, minutes: int) -> int:
+        """Округляет минуты вверх до ближайшего числа, кратного slot_minutes."""
+        chunks = math.ceil(minutes / self.slot_minutes)
+        return chunks * self.slot_minutes
+
+    @staticmethod
+    def _to_utc(value: datetime) -> datetime:
+        """Приводит datetime к UTC, даже если у него нет таймзоны (считаем, что тогда это UTC)."""
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+
+class GreedyScheduler(SchedulerBase):
+    """
+    Жадный планировщик задач.
+
+    Размещает задачи в свободных временных окнах в порядке убывания их скорингового балла.
+    Учитывает:
+    - запрещённые интервалы (события календаря и несдвигаемые задачи)
+    - время бодрствования пользователя
+    - дедлайны задач
+    - зависимости между задачами
+    - возможность дробления задач на части
+    """
+
     def build_plan(
         self,
         tasks: list[Task],
@@ -49,16 +132,16 @@ class GreedyScheduler:
         task_scores: dict[str, float] | None = None,
     ) -> SchedulePlan:
         """
-        Размещает задачу по частям в свободных окнах.
+        Строит план жадным алгоритмом: задачи по убыванию скора.
 
         Аргументы:
-            free_windows: модифицируемый список свободных окон (изменяется при использовании).
-            total_minutes: общая длительность задачи в минутах (округлённая до слота).
-            latest_end: предельное время окончания задачи (дедлайн или конец горизонта).
-            min_chunk_minutes: минимальный размер одного куска.
+            tasks: все задачи пользователя.
+            events: события календаря.
+            now: момент, с которого начинается планирование.
+            task_scores: карта «id задачи -> скор важности».
 
         Возвращает:
-            Кортеж (список найденных интервалов (start, end), остаток минут, которые не удалось разместить).
+            SchedulePlan с занятыми интервалами и списком неразмещённых задач.
         """
 
 
@@ -200,68 +283,6 @@ class GreedyScheduler:
         """Округляет минимальный размер куска до кратного slot_minutes, но не меньше слота."""
         return max(self.slot_minutes, self._round_up_to_slot(minutes))
 
-    def _find_free_windows(
-        self,
-        start_at: datetime,
-        end_at: datetime,
-        busy_intervals: list[tuple[datetime, datetime]],
-    ) -> list[tuple[datetime, datetime]]:
-        """
-        Основной метод поиска свободных временных окон.
-        1. Строим все рабочие (бодрствующие) периоды внутри [start_at, end_at].
-        2. Вычитаем из них занятые интервалы (busy_intervals).
-        3. Возвращаем только те окна, где длина > 0.
-        """
-        working_windows = build_working_windows(start_at, end_at, self.wake_start_hour, self.wake_end_hour)
-        busy = self._normalize_intervals(busy_intervals)
-
-        free_windows = working_windows
-        for busy_start, busy_end in busy:
-            free_windows = self._subtract_interval(free_windows, busy_start, busy_end)
-
-        return [window for window in free_windows if window[1] > window[0]]
-
-
-    @staticmethod
-    def _normalize_intervals(
-        intervals: list[tuple[datetime | None, datetime | None]],
-    ) -> list[tuple[datetime, datetime]]:
-        """
-        Приводит список интервалов к UTC, отбрасывает некорректные (None или конец раньше начала).
-        Сортирует по времени начала.
-        """
-        normalized: list[tuple[datetime, datetime]] = []
-        for start_at, end_at in intervals:
-            if start_at is None or end_at is None or end_at <= start_at:
-                continue
-            normalized.append((GreedyScheduler._to_utc(start_at), GreedyScheduler._to_utc(end_at)))
-        normalized.sort(key=lambda interval: interval[0])
-        return normalized
-
-    @staticmethod
-    def _subtract_interval(
-        windows: list[tuple[datetime, datetime]],
-        busy_start: datetime,
-        busy_end: datetime,
-    ) -> list[tuple[datetime, datetime]]:
-        """
-        Вырезает занятый интервал из списка свободных окон.
-        Если занятый интервал пересекается с окном, окно разрезается на две части (до и после занятого).
-        """
-        result: list[tuple[datetime, datetime]] = []
-
-        for window_start, window_end in windows:
-            if busy_end <= window_start or busy_start >= window_end:
-                result.append((window_start, window_end))
-                continue
-
-            if busy_start > window_start:
-                result.append((window_start, busy_start))
-            if busy_end < window_end:
-                result.append((busy_end, window_end))
-
-        return result
-
     def _allocate_window(
         self,
         free_windows: list[tuple[datetime, datetime]],
@@ -290,15 +311,3 @@ class GreedyScheduler:
             return start_at, end_at
 
         return None
-
-    def _round_up_to_slot(self, minutes: int) -> int:
-        """Округляет минуты вверх до ближайшего числа, кратного slot_minutes."""
-        chunks = math.ceil(minutes / self.slot_minutes)
-        return chunks * self.slot_minutes
-
-    @staticmethod
-    def _to_utc(value: datetime) -> datetime:
-        """Приводит datetime к UTC, даже если у него нет таймзоны (считаем, что тогда это UTC)."""
-        if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)

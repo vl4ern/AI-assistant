@@ -74,7 +74,7 @@ fi
 GPU_LAYERS=0
 MMPROJ_OFFLOAD="false"
 CTX_SIZE="8192"
-MODEL_FILE="Qwen3.5-4B-UD-Q4_K_XL.gguf"
+MODEL_FILE="gemma-4-E2B-it-UD-Q4_K_XL.gguf"
 REASON="CPU-only (нет NVIDIA GPU или nvidia-smi недоступен)"
 
 if [[ $HAVE_NVIDIA_SMI -eq 1 && $VRAM_MB -gt 0 ]]; then
@@ -84,44 +84,37 @@ if [[ $HAVE_NVIDIA_SMI -eq 1 && $VRAM_MB -gt 0 ]]; then
     GPU_LAYERS=99
     MMPROJ_OFFLOAD="true"
     CTX_SIZE="32768"
-    MODEL_FILE="Qwen3.5-4B-UD-Q6_K.gguf"
-    REASON="24+ ГБ VRAM — полный оффлоад модели и проектора, большой контекст"
+    REASON="24+ ГБ VRAM — полный оффлоад Gemma 4 E2B и проектора, большой контекст"
   elif [[ $VRAM_GB -ge 16 ]]; then
     GPU_LAYERS=99
     MMPROJ_OFFLOAD="true"
     CTX_SIZE="16384"
-    MODEL_FILE="Qwen3.5-4B-UD-Q5_K_M.gguf"
-    REASON="16+ ГБ VRAM — полный оффлоад модели и проектора, контекст 16К"
+    REASON="16+ ГБ VRAM — полный оффлоад Gemma 4 E2B и проектора, контекст 16К"
   elif [[ $VRAM_GB -ge 12 ]]; then
     GPU_LAYERS=35
     MMPROJ_OFFLOAD="true"
     CTX_SIZE="16384"
-    MODEL_FILE="Qwen3.5-4B-UD-Q4_K_XL.gguf"
     REASON="12+ ГБ VRAM — модель и проектор на GPU, контекст 16К"
   elif [[ $VRAM_GB -ge 8 ]]; then
     GPU_LAYERS=28
     MMPROJ_OFFLOAD="true"
     CTX_SIZE="12288"
-    MODEL_FILE="Qwen3.5-4B-UD-Q4_K_XL.gguf"
     REASON="8+ ГБ VRAM — большая часть слоёв на GPU, контекст 12К"
   elif [[ $VRAM_GB -ge 6 ]]; then
     GPU_LAYERS=20
     MMPROJ_OFFLOAD="false"
     CTX_SIZE="8192"
-    MODEL_FILE="Qwen3.5-4B-UD-Q4_K_XL.gguf"
     REASON="6 ГБ VRAM — порядка 20 слоёв на GPU, проектор на CPU, контекст 8К"
   elif [[ $VRAM_GB -ge 4 ]]; then
     GPU_LAYERS=14
     MMPROJ_OFFLOAD="false"
     CTX_SIZE="8192"
-    MODEL_FILE="Qwen3.5-4B-UD-Q4_K_M.gguf"
-    REASON="4 ГБ VRAM — ~14 слоёв на GPU, более компактная квантовка Q4_K_M, контекст 8К"
+    REASON="4 ГБ VRAM — ~14 слоёв на GPU, проектор на CPU, контекст 8К"
   else
     GPU_LAYERS=0
     MMPROJ_OFFLOAD="false"
     CTX_SIZE="4096"
-    MODEL_FILE="Qwen3.5-4B-UD-Q4_K_S.gguf"
-    REASON="Менее 4 ГБ VRAM — только CPU, маленькая квантовка Q4_K_S, контекст 4К"
+    REASON="Менее 4 ГБ VRAM — только CPU, контекст 4К"
   fi
 fi
 

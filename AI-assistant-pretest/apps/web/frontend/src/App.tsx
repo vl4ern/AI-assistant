@@ -19,7 +19,7 @@ import type { SchedulePlan } from './api/schedule';
 import { createTask as createTaskApi, getTasks, updateTaskStatus } from './api/tasks';
 import { GoogleCalendarPanel } from './components/GoogleCalendarPanel';
 import { TaskExtractPanel } from './components/TaskExtractPanel';
-import type { ApiTask, ApiTaskCreate, ApiTaskDraft, ApiTaskStatus } from './types/api';
+import type { ApiTask, ApiTaskCreate, ApiTaskStatus } from './types/api';
 import { SettingsProvider } from './settings-provider';
 import { useSettings } from './settings';
 import type { TFunc } from './settings';

@@ -37,6 +37,7 @@
   - [Почему так, а не иначе](#почему-так-а-не-иначе)
   - [Если что-то не работает](#если-что-то-не-работает)
   - [Дневник работы](#дневник-работы)
+    - [25.11.2026 — переход на Gemma 4 E2B](#25112026--переход-на-gemma-4-e2b)
     - [04.11.2026 — задачи из нескольких файлов и несколько задач через локальную LLM](#04112026--задачи-из-нескольких-файлов-и-несколько-задач-через-локальную-llm)
     - [03.11.2026 — Docker-запуск llama-server и автозагрузка моделей](#03112026--docker-запуск-llama-server-и-автозагрузка-моделей)
     - [03.11.2026 — задачи из фото и текста (локальная Qwen3.5 4B)](#03112026--задачи-из-фото-и-текста-локальная-qwen35-4b)
@@ -67,7 +68,7 @@ make up # или make up-gpu для запуска на gpu
 
 `make up` — одна команда для любого ПК: скачивает модели (если их ещё нет),
 собирает backend и frontend, поднимает `api + web + postgres + llm` в
-Docker. Первый запуск дольше обычного: нужно скачать ~3.4 ГБ моделей и
+Docker. Первый запуск дольше обычного: нужно скачать ~4.3 ГБ моделей и
 образ `llama.cpp`.
 
 | Что                                 | Где                       |
@@ -127,7 +128,7 @@ make api-install   # venv + зависимости backend
 make api-dev      # API на http://localhost:8000
 make web-install  # зависимости frontend
 make web-dev      # интерфейс на http://localhost:5173
-make api-test     # тесты backend (99 шт.)
+make api-test     # тесты backend (118 шт.)
 ```
 
 `.env` читают и Makefile, и backend (`app/core/settings.py` подключает
@@ -136,7 +137,7 @@ python-dotenv), переменные одни и те же.
 ### Распознавание задач из фото, текста и PDF
 
 Кнопка «Добавить по фото или тексту» на странице «Задачи» работает через
-локальную мультимодальную модель Qwen3.5 4B и `llama-server` из llama.cpp.
+локальную мультимодальную модель Gemma 4 E2B и `llama-server` из llama.cpp.
 
 - **Вход**: текст, один файл (TXT/MD/CSV/JSON/PDF или JPG/PNG/WebP/GIF/BMP)
   или несколько файлов (лимит — `LOCAL_LLM_MAX_FILES`, по умолчанию 3) —
@@ -151,12 +152,14 @@ python-dotenv), переменные одни и те же.
   задачи. Ответ может содержать до 3 задач (резерв токенов
   `LOCAL_LLM_MAX_TOKENS + 512`).
 
-**Модели не хранятся в git.** Они весят ~3.4 ГБ, а GitHub не принимает
+**Модели не хранятся в git.** Они весят ~4.3 ГБ, а GitHub не принимает
 файлы больше 100 МБ; Git LFS на такой объём не влезает в бесплатную
-квоту. Вместо этого `make models` скачивает те же файлы из публичного
-репозитория `unsloth/Qwen3.5-4B-GGUF` на закреплённой ревизии и сверяет
+квоту. Вместо этого `make models` скачивает те же три файла из публичного
+репозитория `unsloth/gemma-4-E2B-it-GGUF` на закреплённой ревизии и сверяет
 SHA256 с `scripts/models.lock`. На всех компьютерах получаются одинаковые
-модели. `make up` и `make llm-dev` вызывают `make models` автоматически.
+модели: основная Gemma, мультимодальный проектор и MTP-драфтер для
+спекулятивного декодирования. `make up` и `make llm-dev` вызывают
+`make models` автоматически.
 
 Три режима запуска:
 
@@ -195,7 +198,8 @@ LOCAL_LLM_BASE_URL=http://host.docker.internal:8080 \
 ### Стек
 
 - **Backend**: Python 3.12, FastAPI, Pydantic v2, PostgreSQL 16
-  (с in-memory фолбэком), SQLite для кэша интеграций.
+  (с in-memory фолбэком), SQLite для кэша интеграций, OR-Tools (CP-SAT) —
+  для планировщика.
 - **Frontend**: React 19, TypeScript, Vite. Без UI-библиотек — один CSS-файл
   с переменными, тёмно-синяя тема.
 - **Инфраструктура**: docker-compose (api + web + postgres + llm),
@@ -242,7 +246,7 @@ AI-assistant/
 │   ├── download-models.sh            скачивание GGUF из Hugging Face
 │   ├── models.lock                   ревизия + SHA256 моделей
 │   └── run-llama-server.sh           локальный запуск без Docker
-├── models/                           GGUF-модели (скачиваются, не в git)
+├── models/gemma/                     GGUF-модели Gemma (скачиваются, не в git)
 ├── Makefile                          короткие команды
 └── .github/workflows/ci.yml          тесты + линт на каждый пуш
 ```
@@ -371,6 +375,7 @@ integration/
   adapters/google_calendar_adapter.py   Google Calendar (OAuth)
   adapters/llama_server_client.py       клиент OpenAI-совместимого llama-server
   task_extraction.py    промпт, проверка файлов (текст/PDF/картинки) и нормализация ответа LLM
+  task_draft_feedback.py TaskDraftFeedbackService: критерии обратной связи по черновикам, перекалибровка промпта
   sync_scheduler.py     SyncScheduler: фоновая синхронизация + события
   cache_storage.py      SQLite-кэш по external_id
   conflict_resolver.py  слияние версий (LWW / merge-with-notify)
@@ -417,6 +422,41 @@ integration/
 `knowledge`» не нарушается, а внешний мир (локальная модель) остаётся
 внутри `integrations`.
 
+**Обратная связь по черновикам задач и адаптация промпта** (`POST /v1/tasks/extract/feedback`):
+
+- После распознавания пачки задач пользователь может принять черновики или
+  скорректировать у них длительность, описание и приоритет. Обратная связь
+  отправляется **один раз — после добавления последней задачи из пачки**, а не
+  после каждой отдельной задачи.
+- `TaskDraftFeedbackService` (`integration/task_draft_feedback.py`) сравнивает
+  для каждой задачи версию пользователя (`user_draft`) и версию LLM
+  (`llm_draft`) и считает ошибку по трём критериям (целые числа `-3..3`):
+  - `duration`: знак — в какую сторону пользователь изменил время, модуль —
+    целая часть отношения большего значения к меньшему. Пример:
+    `90 → 45 = -2`, `180 → 120 = -1`, `150 → 75 = -2`.
+  - `description`: то же отношение, но для длин описаний в символах; пустое
+    описание не даёт деления на ноль — ошибка упирается в `±3`.
+  - `priority`: обычная разница `priority_пользователя − priority_модели`
+    (приоритеты `1..4`, поэтому разница уже в `-3..3`).
+- Ошибки суммируются по пользователю. Если `|сумма|` по критерию строго больше
+  `TASK_DRAFT_FEEDBACK_STRONG_SIGNAL_THRESHOLD` (по умолчанию `2`), вызывается
+  локальная LLM: она получает накопленный сигнал, текущий блок предпочтений и
+  возвращает обновлённый блок. Например: «пользователь любит чуть более
+  подробные описания» → «очень подробные» → «огромные» — интенсивность зависит
+  от величины накопленной ошибки.
+- Базовый системный промпт (`SYSTEM_PROMPT`) при этом **не меняется**: блок
+  `Персональные предпочтения пользователя:` просто дописывается в конец.
+  После успешной калибровки сбрасываются только критерии, превысившие порог;
+  остальные сигналы продолжают накапливаться. При ошибке LLM накопленный
+  сигнал сохраняется и будет повторён в следующей пачке.
+- Следующий `POST /v1/tasks/extract` с тем же `user_id` использует
+  базовый промпт + персональный блок через `TaskDraftExtractor` →
+  `TaskDraftFeedbackService.get_system_prompt`. Персональные настройки и
+  накопленные суммы хранятся в SQLite (`INTEGRATION_CACHE_PATH`) и переживают
+  перезапуск API.
+- `GET /v1/tasks/extract/prompt` показывает полный промпт текущего
+  пользователя (кнопка «Показать системный промт» в окне распознавания).
+
 **Фоновая синхронизация** стартует вместе с приложением (lifespan в
 `main.py`) и опрашивает IIS раз в 2 часа. `RetryQueue` возвращает
 повторные попытки при сбоях.
@@ -432,7 +472,8 @@ integration/
 ### `intelligence` — планировщик и скоринг
 
 ```text
-scheduler.py      GreedyScheduler — жадное заполнение свободных окон
+cp_sat_scheduler.py CpSatScheduler — планировщик на CP-SAT (OR-Tools), жадный — fallback
+scheduler.py      GreedyScheduler — жадное заполнение свободных окон (fallback)
 ml_scoring.py     MLScoringService — линейная регрессия «важности» задач
 service.py        SchedulerService — оркестратор (rebuild/today/feedback)
 models.py         SchedulePlan, ScheduledSlot, TodayView, ReorderFeedback
@@ -444,11 +485,17 @@ utils/time_utils.py  рабочие окна бодрствования
 1. Берём факты: активные задачи + события (и личные, и общие пары).
 2. Сбрасываем старые интервалы у подвижных задач.
 3. `MLScoringService.build_score_map()` — скор всех задач.
-4. `GreedyScheduler.build_plan()` — по убыванию скора раскладывает задачи
-   в свободные окна: сутки минус события минус нерабочие часы
-   (`WAKE_START_HOUR..WAKE_END_HOUR`), шаг слота `SCHEDULE_SLOT_MINUTES`.
-   Учитывает зависимости (`depends_on`) и разбиение длинных задач
-   (`allow_split`, `min_chunk_minutes`).
+4. `CpSatScheduler.build_plan()` — задачи раскладываются в свободные окна
+   как задача CP-SAT (OR-Tools): окна бодрствования минус события минус
+   нерабочие часы (`WAKE_START_HOUR..WAKE_END_HOUR`), шаг слота
+   `SCHEDULE_SLOT_MINUTES`. Ограничения: дедлайны, зависимости
+   (`depends_on`), запрет пересечений, дробление задач
+   (`allow_split`, `min_chunk_minutes`). Решатель максимизирует суммарную
+   ценность запланированной работы (своевременное выполнение важнее
+   позднего, целый блок предпочтительнее дробления). Если OR-Tools
+   недоступен или время работы решателя (`SCHEDULE_SOLVER_TIME_SECONDS`,
+   по умолчанию 10 с) истекло — используется `GreedyScheduler` (жадный
+   fallback), чтобы API оставался работоспособным.
 5. Интервалы сохраняются в задачах, флаг «расписание грязное» снимается.
 
 **Скоринг** — SGD-регрессия поверх трёх признаков:
@@ -555,6 +602,8 @@ academic_week(day, semester_start) = (day - semester_start).days // 7 % 4 + 1
 | GET        | `/v1/tasks`                      | мои + общие задачи                                                                    | ✓         |
 | POST       | `/v1/tasks`                      | создать задачу (владелец — я)                                                | ✓         |
 | POST       | `/v1/tasks/extract`              | распознать черновики задач из текста/файлов (multipart, до 3 файлов) | ✓         |
+| POST       | `/v1/tasks/extract/feedback`    | записать обратную связь по пачке черновиков (user_draft vs llm_draft, адаптация промпта) | ✓         |
+| GET        | `/v1/tasks/extract/prompt`     | прочитать системный промпт локального распознавания (базовый/адаптированный) | ✓         |
 | GET        | `/v1/tasks/{id}`                 | задача (только своя/общая)                                                     | ✓         |
 | PATCH      | `/v1/tasks/{id}/status`          | сменить статус                                                                         | ✓         |
 | GET        | `/v1/events`                     | мои + общие события                                                                  | ✓         |
@@ -651,7 +700,7 @@ def test_my_service():
 ## Тесты и CI
 
 ```bash
-make api-test                        # 99 тестов
+make api-test                        # 118 тестов
 cd apps/web/frontend && npm run lint # линт фронта
 ```
 
@@ -684,30 +733,34 @@ CI (`.github/workflows/ci.yml`) на каждый пуш и PR: pytest backend'�
 | `AUTH_TOKEN_SECRET`                               | секрет подписи токенов (в проде — случайная строка!) | dev-строка                                                             |
 | `SCHEDULE_HORIZON_DAYS`                           | горизонт планировщика                                                      | `30`                                                                       |
 | `SCHEDULE_SLOT_MINUTES`                           | шаг слота плана                                                                   | `30`                                                                       |
+| `SCHEDULE_SOLVER_TIME_SECONDS`                   | лимит времени работы CP-SAT-решателя при перестроении плана                  | `10`                                                                       |
 | `WAKE_START_HOUR` / `WAKE_END_HOUR`             | часы бодрствования                                                            | `8` / `23`                                                               |
 | `ML_RETRAIN_BATCH_SIZE`                           | пакет дообучения скоринга                                               | `20`                                                                       |
 | `ML_OVERDUE_BONUS`                                | бонус за завершение просроченной                                  | `10`                                                                       |
+| `TASK_DRAFT_FEEDBACK_STRONG_SIGNAL_THRESHOLD`  | порог модуля суммарной ошибки по критерию, после которого перекалибровывается персональный промпт LLM | `2`                                                                       |
 | `DATABASE_URL`                                    | подключение PostgreSQL                                                              | локальный дефолт                                              |
 | `POSTGRES_AUTO_INIT_SCHEMA`                       | накатывать схему при старте                                            | `true`                                                                     |
 | `GOOGLE_CREDENTIALS_FILE` / `GOOGLE_TOKEN_FILE` | путь к OAuth-кредам Google Calendar                                                 | пусто                                                                   |
 | `LOCAL_LLM_ENABLED`                              | включить распознавание задач локальной моделью                     | `true`                                                                     |
 | `LOCAL_LLM_BASE_URL`                             | адрес `llama-server`                                                                    | локально `http://localhost:8080`, в compose `http://llm:8080` |
-| `LOCAL_LLM_MODEL`                                | имя модели в запросах (`--alias` у llama-server)                     | `qwen3.5-4b`                                                               |
+| `LOCAL_LLM_MODEL`                                | имя модели в запросах (`--alias` у llama-server)                     | `gemma-4-e2b`                                                              |
 | `LOCAL_LLM_TIMEOUT_SECONDS`                      | таймаут запроса к модели                                                     | `180`                                                                      |
 | `LOCAL_LLM_MAX_TOKENS`                           | максимум токенов ответа                                                          | `1024`                                                                     |
 | `LOCAL_LLM_TEMPERATURE`                          | температура генерации                                                              | `0.1`                                                                      |
-| `LOCAL_LLM_DISABLE_THINKING`                     | отключить reasoning Qwen (сразу JSON)                                     | `true`                                                                     |
+| `LOCAL_LLM_DISABLE_THINKING`                     | отключить reasoning Gemma 4 (сразу JSON)                                  | `true`                                                                     |
 | `LOCAL_LLM_VISION_ENABLED`                       | разрешить распознавание изображений                                  | `true`                                                                     |
 | `LOCAL_LLM_MAX_TEXT_KB` / `LOCAL_LLM_MAX_IMAGE_MB` | лимиты текста и изображения                                         | `256` КБ / `10` МБ                                                   |
 | `LOCAL_LLM_MAX_FILES`                           | максимум файлов в одном распознавании (текст/фото/PDF)              | `3`                                                                     |
-| `LOCAL_LLM_MODEL_FILE` / `LOCAL_LLM_MMPROJ_FILE` | имена GGUF-файлов в `models/`                                               | `Qwen3.5-4B-UD-Q4_K_XL.gguf` / `mmproj-F16.gguf` |
-| `LOCAL_LLM_HF_REPO` / `LOCAL_LLM_HF_REVISION`    | откуда `make models` качает файлы                                     | `unsloth/Qwen3.5-4B-GGUF` + закреплённый commit |
-| `LOCAL_LLM_MODEL_PATH` / `LOCAL_LLM_MMPROJ_PATH` | явные пути к GGUF для `scripts/run-llama-server.sh`        | `models/<имя из файлов выше>`                                  |
+| `LOCAL_LLM_MODELS_DIR`                           | папка с GGUF-файлами (относительно корня проекта)                            | `models/gemma`                                                             |
+| `LOCAL_LLM_MODEL_FILE` / `LOCAL_LLM_MMPROJ_FILE` / `LOCAL_LLM_MTP_FILE` | имена GGUF-файлов (модель / проектор / MTP-драфтер) | `gemma-4-E2B-it-UD-Q4_K_XL.gguf` / `mmproj-F16.gguf` / `mtp-gemma-4-E2B-it.gguf` |
+| `LOCAL_LLM_MTP_N_MAX`                            | сколько токенов MTP-драфтер предлагает за шаг                | `4`                                                                        |
+| `LOCAL_LLM_HF_REPO` / `LOCAL_LLM_HF_REVISION`    | откуда `make models` качает файлы                                     | `unsloth/gemma-4-E2B-it-GGUF` + закреплённый commit |
+| `LOCAL_LLM_MODEL_PATH` / `LOCAL_LLM_MMPROJ_PATH` / `LOCAL_LLM_MTP_PATH` | явные пути к GGUF для `scripts/run-llama-server.sh` | `models/gemma/<имя из файлов выше>` |
 | `LLAMA_SERVER_BIN`                               | путь к собранному `llama-server` (локальный запуск)        | из `PATH`                                                                 |
 | `LOCAL_LLM_GPU_LAYERS`                           | сколько слоёв выгрузить на GPU (локальный запуск)          | `0` (CPU)                                                                 |
 | `LOCAL_LLM_HOST` / `LOCAL_LLM_PORT`              | адрес и порт `llama-server` (порт также публикует контейнер) | `0.0.0.0` / `8080`                                                     |
 | `LOCAL_LLM_CTX_SIZE`                             | размер контекста                                                                    | `16384`                                                                    |
-| `LOCAL_LLM_IMAGE_MIN_TOKENS`                     | минимум токенов на изображение (Qwen-VL)                      | `1024`                                                                     |
+| `LOCAL_LLM_IMAGE_MIN_TOKENS`                     | минимум токенов на изображение (динамическое разрешение) | `1024`                                                          |
 
 ---
 
@@ -751,12 +804,20 @@ CI (`.github/workflows/ci.yml`) на каждый пуш и PR: pytest backend'�
   `TaskDrafts` (массив `tasks`), а сохранение остаётся за `knowledge`. Модель
   можно выключить (`LOCAL_LLM_ENABLED=false`), и остальные сценарии
   продолжат работать.
-- **Почему модели не в git, а скачиваются.** GGUF-файлы весят 3.4 ГБ;
-  GitHub отклоняет файлы больше 100 МБ, а бесплатный Git LFS (1 ГБ) их не
-  вмещает. Поэтому в git лежат только `scripts/models.lock` с ревизией
-  Hugging Face и SHA256, а `make models` скачивает те же файлы на любом ПК.
-  Это воспроизводимее, чем «у меня модель есть, а у тебя нет», и не
-  раздувает историю репозитория.
+- **Почему модели не в git, а скачиваются.** Три GGUF-файла Gemma весят
+  ~4.3 ГБ; GitHub отклоняет файлы больше 100 МБ, а бесплатный Git LFS
+  (1 ГБ) их не вмещает. Поэтому в git лежат только `scripts/models.lock`
+  с ревизией Hugging Face и SHA256, а `make models` скачивает те же файлы
+  на любом ПК. Это воспроизводимее, чем «у меня модель есть, а у тебя нет»,
+  и не раздувает историю репозитория.
+- **Почему планировщик на CP-SAT, а не только жадный.** Жадный алгоритм
+  заполнял свободные окна в порядке убывания скоров и не пересчитывал
+  уже запланированное при появлении новых конфликтов — мог потратить
+  лучшие слоты на менее важные задачи. CP-SAT из OR-Tools решает задачу
+  набора интервалов целиком (окна, дедлайны, зависимости, дробление) и
+  максимизирует суммарную ценность запланированной работы. Жадный
+  остаётся fallback'ом, если OR-Tools не установлен или время работы
+  решателя истекло.
 
 ---
 
@@ -773,7 +834,9 @@ CI (`.github/workflows/ci.yml`) на каждый пуш и PR: pytest backend'�
 | Google Calendar не появляется в списке адаптеров    | нужен `credentials.json` (Google Cloud Console) по пути `GOOGLE_CREDENTIALS_FILE`                                                                                                                                                                                                                                                                                                                                                       |
 | Клоны занятий в расписании                               | устаревший кэш → удалить `data/integration_cache.db` и нажать «Обновить с портала»                                                                                                                                                                                                                                                                                                                     |
 | «Локальная модель недоступна» при распознавании | не запущен `llama-server` или неверный `LOCAL_LLM_BASE_URL` → в Docker: `docker compose ps`, `docker compose logs llm`, адрес API — `http://llm:8080`; локально: `make llm-dev` и `curl --noproxy '*' http://localhost:8080/health` |
-| Фото не распознаются, текст — да                 | `llama-server` запущен без `mmproj` → проверьте `LOCAL_LLM_MMPROJ_FILE`, пересоздайте контейнер: `docker compose up -d --force-recreate llm`; локально — `make models` |
+| Фото не распознаются, текст — да                 | `llama-server` запущен без `mmproj` → проверьте `LOCAL_LLM_MODELS_DIR` и `LOCAL_LLM_MMPROJ_FILE` (по умолчанию `models/gemma/mmproj-F16.gguf`), пересоздайте контейнер: `docker compose up -d --force-recreate llm`; локально — `make models` |
+| Gemma 4 не загружается, `unknown model architecture` | устаревший `llama-server` или Docker-образ → обновите образ (`docker compose pull llm`) или пересоберите локальный `llama-server` из свежей версии llama.cpp |
+| MTP не ускоряет генерацию или падает с ошибкой draft | проверьте `LOCAL_LLM_MTP_FILE` и наличие `models/gemma/mtp-gemma-4-E2B-it.gguf` (`make models` скачает файл); локальный скрипт без MTP продолжит работу, но медленнее, а в Docker файл должен быть на месте |
 | `make models` не скачивает модели | нет сети/мешает прокси → повторите команду (скачивание продолжится с `.part`); проверьте `curl -I https://huggingface.co`, при необходимости задайте `HTTPS_PROXY` |
 
 ---
@@ -781,6 +844,69 @@ CI (`.github/workflows/ci.yml`) на каждый пуш и PR: pytest backend'�
 ## Дневник работы
 
 Живой журнал ключевых решений. Новые записи — сверху.
+
+### 26.11.2026 — обратная связь по черновикам задач и адаптация промпта
+
+- Добавлен `POST /v1/tasks/extract/feedback`: клиент отправляет обратную
+  связь по всей пачке черновиков **один раз после добавления последней
+  задачи** (версии пользователя `user_draft` против версий LLM `llm_draft`).
+- `TaskDraftFeedbackService` (`integrations/integration/task_draft_feedback.py`)
+  считает ошибки по трём критериям в диапазоне `-3..3`: длительность и
+  описание — «во сколько раз» (целая часть отношения большего к меньшему),
+  приоритет — обычная разница. Ошибки суммируются; при `|сумма| >
+  TASK_DRAFT_FEEDBACK_STRONG_SIGNAL_THRESHOLD` (по умолчанию 2) локальная LLM
+  обновляет **только блок персональных предпочтений**. Базовый `SYSTEM_PROMPT`
+  не меняется, блок дописывается в конец. После калибровки сбрасываются
+  только превысившие порог критерии; при сбое LLM сигнал сохраняется.
+- `TaskDraftExtractor` при `user_id` использует промпт из feedback service.
+  Персональные настройки и накопленные суммы сохраняются в SQLite
+  (`INTEGRATION_CACHE_PATH`) и переживают перезапуск API.
+- Фронтенд копит пары «LLM → пользователь» по пачке и отправляет их одним
+  запросом после последней задачи; следующее распознавание дожидается
+  завершения калибровки.
+
+### 25.11.2026 — переход на CP-SAT планировщик
+
+- Жадный `GreedyScheduler` признан недостаточно эффективным: заполнял
+  окна в порядке убывания скоров без глобального пересчёта, мог не
+  найти лучшую комбинацию задач.
+- Добавлен `CpSatScheduler` (`apps/api/app/modules/intelligence/
+  cp_sat_scheduler.py`) на базе CP-SAT из OR-Tools: задачи раскладываются
+  по слотам как constrained-оптимизация (окна бодрствования, события,
+  несдвигаемые задачи, дедлайны, зависимости, дробление), целевая функция
+  максимизирует ценность запланированной работы.
+- Ограничения прежнего планировщика сохранены: рабочие часы, события,
+  дедлайны, `depends_on`, `allow_split`/`min_chunk_minutes`, запрет
+  пересечений.
+- Если OR-Tools не установлен или время работы решателя истекло
+  (`SCHEDULE_SOLVER_TIME_SECONDS`, дефолт 10 с) — используется жадный
+  алгоритм (`GreedyScheduler`) как fallback: API не ломается.
+- `GreedyScheduler` не удалён: стал базовой реализацией
+  `SchedulerBase` + fallback в CP-SAT; старые тесты жадного алгоритма
+  (`tests/intelligence/test_scheduler.py`) не тронуты.
+- `ortools>=9.10,<10` добавлен в `apps/api/requirements.txt`; переменная
+  окружения `SCHEDULE_SOLVER_TIME_SECONDS` добавлена в settings и
+  `.env.example`.
+- Тесты: новый `tests/intelligence/test_cp_sat_scheduler.py` (8 сценариев:
+  приоритет, предпочтение двух medium над одним long, дробление, целый
+  блок, остаток, дедлайн, зависимости, события/несдвигаемые, пустой ввод,
+  fallback); остальные сценарии модуля переведены на CP-SAT.
+
+### 25.11.2026 — переход на Gemma 4 E2B
+
+- Локальное распознавание задач переведено с Qwen3.5 4B на мультимодальную
+  **Gemma 4 E2B**. Это касается и значений по умолчанию: `LOCAL_LLM_MODEL`
+  теперь `gemma-4-e2b`, а `make models` скачивает Gemma.
+- Используются три файла из `models/gemma/`: основная модель
+  `gemma-4-E2B-it-UD-Q4_K_XL.gguf`, мультимодальный проектор
+  `mmproj-F16.gguf` и MTP-драфтер `mtp-gemma-4-E2B-it.gguf`.
+- `llama-server` запускается с `--spec-type draft-mtp`,
+  `--spec-draft-model` и `--spec-draft-n-max 4`: MTP-драфтер ускоряет
+  генерацию спекулятивным декодированием.
+- Репозиторий моделей — `unsloth/gemma-4-E2B-it-GGUF` на закреплённой
+  ревизии; SHA256 всех трёх файлов лежит в `scripts/models.lock`.
+- Если остался старый `.env` с Qwen, обновите `LOCAL_LLM_*` по
+  `.env.example` (или скопируйте его заново).
 
 ### 04.11.2026 — задачи из нескольких файлов и несколько задач через локальную LLM
 
@@ -958,7 +1084,7 @@ PostgreSQL и API-клиенты; `integration_module` — синхрониза�
 модули без общего контракта складываются в репозиторий, но не работают
 вместе.
 
----
+---~~~~
 
 ## Командная работа
 

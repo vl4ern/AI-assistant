@@ -17,6 +17,11 @@ class AppSettings(BaseModel):
     schedule_slot_minutes: int = Field(
         default=int(os.getenv("SCHEDULE_SLOT_MINUTES", "30")), ge=15, le=120
     )
+    schedule_solver_time_seconds: float = Field(
+        default=float(os.getenv("SCHEDULE_SOLVER_TIME_SECONDS", "10")),
+        ge=1,
+        le=60,
+    )
     wake_start_hour: int = Field(default=int(os.getenv("WAKE_START_HOUR", "8")), ge=0, le=23)
     wake_end_hour: int = Field(default=int(os.getenv("WAKE_END_HOUR", "23")), ge=1, le=24)
     ml_retrain_batch_size: int = Field(
@@ -24,6 +29,11 @@ class AppSettings(BaseModel):
     )
     ml_overdue_bonus: float = Field(
         default=float(os.getenv("ML_OVERDUE_BONUS", "10")), ge=0, le=10000
+    )
+    task_draft_feedback_strong_signal_threshold: int = Field(
+        default=int(os.getenv("TASK_DRAFT_FEEDBACK_STRONG_SIGNAL_THRESHOLD", "2")),
+        ge=1,
+        le=1000,
     )
     database_url: str = os.getenv(
         "DATABASE_URL",
@@ -59,7 +69,7 @@ class AppSettings(BaseModel):
         "on",
     }
     local_llm_base_url: str = os.getenv("LOCAL_LLM_BASE_URL", "http://localhost:8080")
-    local_llm_model: str = os.getenv("LOCAL_LLM_MODEL", "qwen3.5-4b")
+    local_llm_model: str = os.getenv("LOCAL_LLM_MODEL", "gemma-4-e2b")
     local_llm_api_key: str = os.getenv("LOCAL_LLM_API_KEY", "")
     local_llm_timeout_seconds: int = Field(
         default=int(os.getenv("LOCAL_LLM_TIMEOUT_SECONDS", "180")), ge=5, le=600

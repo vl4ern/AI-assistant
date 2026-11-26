@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 #
-# Скачивает GGUF-модель и мультимодальный проектор для llama-server.
-# Файлы кладутся в models/ и проверяются по SHA256 из scripts/models.lock.
+# Скачивает GGUF-модель Gemma, мультимодальный проектор и MTP-драфтер
+# для llama-server. Файлы кладутся в models/gemma/ и проверяются по SHA256
+# из scripts/models.lock.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-MODEL_DIR="${LOCAL_LLM_MODELS_DIR:-models}"
-MODEL_FILE="${LOCAL_LLM_MODEL_FILE:-Qwen3.5-4B-UD-Q4_K_XL.gguf}"
+MODEL_DIR="${LOCAL_LLM_MODELS_DIR:-models/gemma}"
+MODEL_FILE="${LOCAL_LLM_MODEL_FILE:-gemma-4-E2B-it-UD-Q4_K_XL.gguf}"
 MMPROJ_FILE="${LOCAL_LLM_MMPROJ_FILE:-mmproj-F16.gguf}"
-HF_REPO="${LOCAL_LLM_HF_REPO:-unsloth/Qwen3.5-4B-GGUF}"
-HF_REVISION="${LOCAL_LLM_HF_REVISION:-e87f176479d0855a907a41277aca2f8ee7a09523}"
+MTP_FILE="${LOCAL_LLM_MTP_FILE:-mtp-gemma-4-E2B-it.gguf}"
+HF_REPO="${LOCAL_LLM_HF_REPO:-unsloth/gemma-4-E2B-it-GGUF}"
+HF_REVISION="${LOCAL_LLM_HF_REVISION:-0314792d7f1f7e229411f620751375812bb9faf2}"
 BASE_URL="https://huggingface.co/${HF_REPO}/resolve/${HF_REVISION}"
 LOCK_FILE="${LOCAL_LLM_MODELS_LOCK:-scripts/models.lock}"
 
@@ -85,6 +87,11 @@ download_one() {
 
 mkdir -p "$MODEL_DIR"
 download_one "$MODEL_FILE"
-download_one "$MMPROJ_FILE"
+if [[ -n "$MMPROJ_FILE" ]]; then
+  download_one "$MMPROJ_FILE"
+fi
+if [[ -n "$MTP_FILE" ]]; then
+  download_one "$MTP_FILE"
+fi
 
 echo "Модели готовы: $MODEL_DIR"

@@ -11,6 +11,11 @@ from app.modules.integrations.integration.task_extraction import (
     TaskExtractionError,
 )
 from app.modules.integrations.models import TaskDrafts
+from app.modules.integrations.models.extraction import (
+    TaskDraftFeedback,
+    TaskDraftFeedbackCreate,
+    TaskDraftSystemPrompt,
+)
 from app.modules.knowledge.models import Event, EventCreate, Task, TaskCreate, TaskStatusUpdate
 from app.modules.knowledge.rules import KnowledgeRuleViolation
 
@@ -84,8 +89,6 @@ async def extract_task_draft(
     отправляет обычный POST /v1/tasks. Так данные по-прежнему принадлежат
     knowledge.
     """
-    del user  # зависимость нужна только для проверки токена
-
     upload_files: list[TaskExtractFile] = []
     if file:
         for upload in file:
@@ -101,6 +104,46 @@ async def extract_task_draft(
         return container.integration_service.extract_task_draft(
             text=text,
             files=upload_files,
+            user_id=user.id,
+        )
+    except TaskExtractionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.post("/tasks/extract/feedback", response_model=TaskDraftFeedback)
+def record_task_draft_feedback(
+    payload: TaskDraftFeedbackCreate,
+    user: UserPublic = Depends(get_current_user),
+) -> TaskDraftFeedback:
+    """
+    Записать обратную связь по всей пачке черновиков.
+
+    Вызывается один раз — после добавления последней задачи из пачки,
+    предложенной локальной LLM. Сервис сравнивает LLM-версии и версии
+    пользователя по каждому черновику, суммирует ошибки по трём параметрам
+    (длительность, описание, приоритет) и, если |сумма| превысила порог,
+    перекалибровывает персональный блок системного промпта через локальную LLM.
+    """
+    try:
+        return container.integration_service.record_task_draft_feedback(
+            user_id=user.id,
+            items=payload.items,
+        )
+    except TaskExtractionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.get("/tasks/extract/prompt", response_model=TaskDraftSystemPrompt)
+def get_task_draft_system_prompt(
+    user: UserPublic = Depends(get_current_user),
+) -> TaskDraftSystemPrompt:
+    """
+    Вернуть системный промпт локального распознавания задач для текущего
+    пользователя (базовый либо адаптированный через feedback loop).
+    """
+    try:
+        return container.integration_service.get_task_draft_system_prompt(
+            user_id=user.id
         )
     except TaskExtractionError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc

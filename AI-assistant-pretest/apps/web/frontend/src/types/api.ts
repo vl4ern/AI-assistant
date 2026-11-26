@@ -54,3 +54,7 @@ export type ApiTaskDraft = {
 export type ApiTaskDrafts = {
   tasks: ApiTaskDraft[];
 };
+
+export type ApiTaskDraftPrompt = {
+  prompt: string;
+};

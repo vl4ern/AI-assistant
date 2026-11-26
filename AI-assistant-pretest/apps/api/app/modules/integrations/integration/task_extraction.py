@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pypdf import PdfReader
 
@@ -17,6 +17,11 @@ from app.modules.integrations.integration.adapters.llama_server_client import (
     LlmUnavailableError,
 )
 from app.modules.integrations.models.extraction import TaskDraft, TaskDrafts
+
+if TYPE_CHECKING:
+    from app.modules.integrations.integration.task_draft_feedback import (
+        TaskDraftFeedbackService,
+    )
 
 TEXT_EXTENSIONS = {".txt", ".md", ".markdown", ".csv", ".json", ".log", ".yaml", ".yml"}
 PDF_EXTENSIONS = {".pdf"}
@@ -173,6 +178,7 @@ class TaskDraftExtractor:
         max_files: int = 3,
         max_tokens: int = 1024,
         temperature: float = 0.1,
+        feedback_service: "TaskDraftFeedbackService | None" = None,
     ) -> None:
         self._client = client
         self._vision_enabled = vision_enabled
@@ -181,6 +187,7 @@ class TaskDraftExtractor:
         self._max_files = max_files
         self._max_tokens = max_tokens
         self._temperature = temperature
+        self._feedback_service = feedback_service
 
     def extract(
         self,
@@ -188,12 +195,17 @@ class TaskDraftExtractor:
         text: str = "",
         files: list[TaskExtractFile] | None = None,
         now: datetime | None = None,
+        user_id: str | None = None,
     ) -> TaskDrafts:
         """
         Возвращает черновики задач (один или несколько) из текста и файлов.
 
         Мультизадачный режим включается ответом модели: она сама решает,
         что материал описывает одну задачу или несколько независимых задач.
+
+        `user_id` — владелец черновиков. Если для него уже накоплена
+        достаточная обратная связь и сработал feedback loop, системный
+        промпт будет адаптирован под этого пользователя.
         """
         now = self._local_now(now)
         text = (text or "").strip()
@@ -281,7 +293,7 @@ class TaskDraftExtractor:
 
         user_prompt = self._build_user_prompt(text, file_texts, image_data_urls)
         messages = [
-            {"role": "system", "content": self._system_prompt(now)},
+            {"role": "system", "content": self._system_prompt(now, user_id=user_id)},
             {"role": "user", "content": self._user_content(user_prompt, image_data_urls)},
         ]
 
@@ -290,6 +302,8 @@ class TaskDraftExtractor:
                 messages,
                 max_tokens=self._max_tokens + MULTI_TASK_TOKEN_RESERVE,
                 temperature=self._temperature,
+                # Грамматика llama-server не даёт модели вернуть markdown вокруг JSON.
+                response_format={"type": "json_object"},
             )
         except LlmUnavailableError as exc:
             raise TaskExtractionError(str(exc), status_code=503) from exc
@@ -315,7 +329,15 @@ class TaskDraftExtractor:
             return now.astimezone()
         return now
 
-    def _system_prompt(self, now: datetime) -> str:
+    def _system_prompt(self, now: datetime, *, user_id: str | None = None) -> str:
+        """
+        Собирает системный промпт: базовый, либо адаптированный через
+        feedback loop для конкретного пользователя (если тот проходил
+        обратную связь и был перекалиброван).
+        """
+        feedback_service = self._feedback_service
+        if feedback_service is not None:
+            return feedback_service.get_system_prompt(user_id=user_id, now=now)
         offset = now.strftime("%z") or "+0000"
         offset = f"{offset[:3]}:{offset[3:]}"
         return SYSTEM_PROMPT.format(

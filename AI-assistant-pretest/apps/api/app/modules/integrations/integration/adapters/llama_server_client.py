@@ -23,6 +23,7 @@ class LlmChatClient(Protocol):
         *,
         max_tokens: int,
         temperature: float,
+        response_format: dict[str, Any] | None = None,
     ) -> str:
         ...
 
@@ -32,13 +33,14 @@ class LlamaServerChatClient:
     Клиент OpenAI-совместимого API llama-server.
 
     llama-server запускается отдельно, например:
-        llama-server -m Qwen3.5-4B-Q4_K_M.gguf --mmproj mmproj-F16.gguf --jinja
+        llama-server -m gemma-4-E2B-it-UD-Q4_K_XL.gguf \
+            --mmproj mmproj-F16.gguf --jinja
     """
 
     def __init__(
         self,
         base_url: str = "http://localhost:8080",
-        model: str = "qwen3.5-4b",
+        model: str = "gemma-4-e2b",
         api_key: str = "",
         timeout_seconds: int = 120,
         disable_thinking: bool = True,
@@ -64,6 +66,7 @@ class LlamaServerChatClient:
         *,
         max_tokens: int,
         temperature: float,
+        response_format: dict[str, Any] | None = None,
     ) -> str:
         payload: dict[str, Any] = {
             "model": self._model,
@@ -71,12 +74,16 @@ class LlamaServerChatClient:
             "max_tokens": max_tokens,
             "temperature": temperature,
             "stream": False,
-            # Грамматика llama-server не даёт модели вернуть markdown вокруг JSON.
-            "response_format": {"type": "json_object"},
         }
 
+        if response_format is not None:
+            # Передаём формат ответа явно: для тонкой настройки промпта
+            # нужен свободный текст, для распознавания — JSON.
+            payload["response_format"] = response_format
+
         if self._disable_thinking:
-            # Qwen3/3.5 без этого может потратить весь ответ на reasoning.
+            # Gemma 4 поддерживает режим рассуждений: без этого флага модель
+            # может потратить ответ на reasoning вместо JSON.
             payload["chat_template_kwargs"] = {"enable_thinking": False}
 
         headers = {"Content-Type": "application/json"}
