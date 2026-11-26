@@ -132,6 +132,10 @@ class GoogleCalendarAdapter(IServiceAdapter):
             flow = InstalledAppFlow.from_client_secrets_file(
                 self.credentials_file, SCOPES
             )
+            # Явно задаём локальный callback: сервер слушает 0.0.0.0:8080
+            # (порт публикуется compose), а без явного redirect_uri у flow
+            # redirect_uri = None — и Google отклоняет запрос авторизации.
+            flow.oauth2session.redirect_uri = "http://localhost:8080/"
             auth_url, state = flow.authorization_url(prompt="consent")
             
             print("\n" + "="*50)
